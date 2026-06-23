@@ -251,3 +251,55 @@ function applyParsed(p) {
   }
 }
 
+// ── View: SIMULATOR (what-if) ──────────────────────────────────────────────
+VIEWS.simulator = function () {
+  const r = currentResult();
+  if (r.enteredCount === 0)
+    return `<div class="card"><h2>What-If Simulator</h2><p class="hint">Enter your current numbers on the <b>Assess</b> tab first, then come back to experiment.</p></div>`;
+  const sliders = ['aerobic','strength','core'].map((comp) => {
+    const c = r.components[comp];
+    if (!c) return '';
+    const t = tableFor(draft.sex, draft.age, comp, c.exercise);
+    const raws = t.anchors.map(a=>a[0]);
+    const lo = Math.min(...raws), hi = Math.max(...raws);
+    const disp = TIME_EXERCISES.has(c.exercise) ? fmtTime(c.raw) : c.raw;
+    return `<div class="comp-bar">
+      <div class="top"><span>${cap(comp)} — <span id="sv-${comp}">${disp}</span></span><span id="sp-${comp}">${c.points} pts</span></div>
+      <input type="range" data-sim="${comp}" min="${lo}" max="${hi}" step="${TIME_EXERCISES.has(c.exercise)?1:1}" value="${c.raw}">
+    </div>`;
+  }).join('');
+  return `<div class="card">
+    <h2>What-If Simulator</h2>
+    <p class="hint">Drag to see how each change moves your composite and pass/fail in real time. Best place to find your cheapest points.</p>
+    <div class="score-hero" style="margin:10px 0">
+      <div class="dial" id="sim-dial" style="--pct:${r.composite};--dial-color:${r.band.color}">
+        <div class="num"><b id="sim-score">${r.composite}</b><span>/ 100</span></div>
+      </div>
+      <div id="sim-verdict"></div>
+    </div>
+    ${sliders}
+  </div>`;
+};
+WIRES.simulator = function () {
+  const overrides = {};
+  const update = () => {
+    const res = whatIf(draft, overrides);
+    $('#sim-score').textContent = res.composite;
+    const dial = $('#sim-dial');
+    dial.style.setProperty('--pct', res.composite);
+    dial.style.setProperty('--dial-color', res.band.color);
+    $('#sim-verdict').innerHTML =
+      `<div class="badge" style="background:${res.band.color};color:#02132b">${res.band.label}</div>
+       <div style="margin-top:6px">${res.complete?(res.pass?'<span class="tag-ok">PASS</span>':'<span class="tag-fail">FAIL</span>'):'<span class="pill">partial</span>'}</div>`;
+    for (const comp of Object.keys(overrides)) {
+      const c = res.components[comp];
+      $(`#sp-${comp}`).textContent = `${c.points} pts`;
+      $(`#sv-${comp}`).textContent = TIME_EXERCISES.has(c.exercise) ? fmtTime(c.raw) : c.raw;
+    }
+  };
+  app.querySelectorAll('[data-sim]').forEach((sl) => {
+    sl.oninput = (e) => { overrides[e.target.dataset.sim] = +e.target.value; update(); };
+  });
+  update();
+};
+
