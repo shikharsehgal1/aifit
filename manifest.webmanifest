@@ -1,0 +1,14 @@
+{
+  "name": "PFAi — USAF Fitness Assessment Coach",
+  "short_name": "PFAi",
+  "description": "Estimate your USAF PFA score, simulate changes, and plan training — on-device.",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#09090b",
+  "theme_color": "#09090b",
+  "orientation": "portrait-primary",
+  "icons": [
+    { "src": "./icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}
