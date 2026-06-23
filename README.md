@@ -27,14 +27,29 @@ camera (`getUserMedia`) and ES modules work.
 | **Leader View** | 🟡 Demo | Local unit-readiness roll-up. Production needs accounts + authorization + sync. |
 | **Standards** | ✅ Real | Shows the ruleset, weighting, bands, and data-provenance warning. |
 
-## ⚠️ The single most important caveat
+## Scoring data & fidelity
 
-`js/data/standards.js` contains **approximate** scoring tables, not the official
-charts. The scoring *engine* is correct; the *numbers* must be replaced with
-verbatim values from the current **DAFMAN 36-2905** before any real airman relies
-on this. The file is structured (anchor points + interpolation) so official
-values drop in without touching the engine, and `STANDARD.rulesetVersion` should
-be bumped when they do.
+`js/data/standards.js` is now switchable between two rulesets (Standards tab):
+
+- **Legacy PFA (60/20/20)** — the 1.5-mile run, 1-minute push-up and 1-minute
+  sit-up tables carry the **official** component minimums and maximum-point
+  thresholds for all nine 5-year age brackets, both sexes, transcribed from the
+  published USAF Fitness Assessment Scoring charts ("Final Version", 2022).
+  Intermediate point values are **interpolated** between official anchor points
+  (run anchors follow the published low/moderate/high-risk breakpoints) and may
+  differ from the printed chart by up to ~1–2 points; the pass minimums and
+  max-point thresholds are exact. Alternate events (HAMR, hand-release push-ups,
+  cross-leg reverse crunch, forearm plank) are flagged `official:false` —
+  estimates pending verbatim transcription.
+- **PFRA 2026 (preview)** — the new 100-point model (2-mile run 50 /
+  waist-to-height 20 / strength 15 / core 15, effective 1 Mar 2026). Point
+  tables are provisional pending official publication; the waist-to-height
+  component is not yet scored. Use Legacy for scored results.
+
+Sources: USAF Fitness Assessment Scoring charts (AFROTC/AFPC reproductions,
+Final Version 2022) — male & female, all age brackets. `STANDARD.rulesetVersion`
+is bumped whenever the embedded tables change so saved assessments stay
+attributable to the ruleset they were scored under.
 
 ## Architecture
 
@@ -53,7 +68,8 @@ js/
 
 ## Not yet built (next steps)
 
-- Real DAFMAN 36-2905 charts + altitude adjustment for run scoring
+- Verbatim transcription of the alternate-event charts (HAMR, HRP, cross-leg
+  crunch, plank) and the official PFRA-2026 point tables; altitude adjustment
 - Component medical-exemption handling in composite logic
 - Multi-branch standards (Army ACFT, Navy PRT, Marine PFT/CFT) — engine is branch-agnostic
 - Wearable import (Apple Health / Garmin)
