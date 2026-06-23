@@ -4,6 +4,11 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>PFAi — USAF Fitness Assessment Coach</title>
+  <meta name="description" content="Estimate your USAF PFA score, simulate changes, and plan training — private and on-device." />
+  <meta name="theme-color" content="#09090b" />
+  <link rel="manifest" href="manifest.webmanifest" />
+  <link rel="icon" href="icon.svg" type="image/svg+xml" />
+  <link rel="apple-touch-icon" href="icon.svg" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
@@ -26,17 +31,17 @@
     <div class="countdown" id="countdown"></div>
   </header>
 
-  <nav class="tabs" id="tabs">
-    <button data-view="assess" class="active">Assess</button>
-    <button data-view="simulator">What-If</button>
-    <button data-view="plan">Plan</button>
-    <button data-view="progress">Progress</button>
-    <button data-view="scan">Body Scan <span class="beta">beta</span></button>
-    <button data-view="leader">Leader View</button>
-    <button data-view="about">Standards</button>
+  <nav class="tabs" id="tabs" role="tablist" aria-label="Views">
+    <button data-view="assess" class="active" role="tab" aria-selected="true">Assess</button>
+    <button data-view="simulator" role="tab" aria-selected="false">What-If</button>
+    <button data-view="plan" role="tab" aria-selected="false">Plan</button>
+    <button data-view="progress" role="tab" aria-selected="false">Progress</button>
+    <button data-view="scan" role="tab" aria-selected="false">Body Scan <span class="beta">beta</span></button>
+    <button data-view="leader" role="tab" aria-selected="false">Leader View</button>
+    <button data-view="about" role="tab" aria-selected="false">Standards</button>
   </nav>
 
-  <main id="app"></main>
+  <main id="app" tabindex="-1"></main>
 
   <div class="disclaimer">
     Unofficial estimate for training preparation. Not affiliated with the U.S. Air Force or DoD.
@@ -48,5 +53,10 @@
   <div id="toast" class="toast"></div>
 
   <script type="module" src="js/app.js"></script>
+  <script>
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(() => {}));
+    }
+  </script>
 </body>
 </html>
