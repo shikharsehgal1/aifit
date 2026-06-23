@@ -372,3 +372,55 @@ function wirePlanLog() {
   });
 }
 
+// ── View: PROGRESS ─────────────────────────────────────────────────────────
+VIEWS.progress = function () {
+  const comp = store.trendSeries(state, 'composite');
+  const series = ['aerobic','strength','core'].map((k)=>({k,data:store.trendSeries(state,k)}));
+  const badges = state.achievements.map((k)=>`<span class="badge" style="background:var(--panel-2)">🏅 ${store.badgeLabel(k)}</span>`).join(' ') || '<span class="hint">No badges yet — save an assessment to start.</span>';
+  return `<div class="grid two">
+    <div class="card">
+      <h2>Composite trend</h2>
+      ${comp.length ? sparkline(comp) : '<p class="hint">Save assessments over time to see your trend.</p>'}
+      <div style="margin-top:14px">${series.map(s=>s.data.length?`<div class="comp-bar"><div class="top"><span>${cap(s.k)}</span><span>${s.data.at(-1).value} pts</span></div>${sparkline(s.data,40)}</div>`:'').join('')}</div>
+    </div>
+    <div class="card">
+      <h2>Achievements</h2>
+      <div style="display:flex;gap:6px;flex-wrap:wrap">${badges}</div>
+      <h3 style="margin-top:18px">Workout log</h3>
+      <div class="kv"><span>Sessions completed</span><b>${state.logs.filter(l=>l.done).length}</b></div>
+      <div class="kv"><span>Assessments saved</span><b>${state.assessments.length}</b></div>
+      <div style="margin-top:12px;display:flex;gap:8px">
+        <button class="btn secondary" id="export">Export data</button>
+        <button class="btn secondary" id="reset">Reset all</button>
+      </div>
+    </div>
+  </div>`;
+};
+WIRES.progress = function () {
+  $('#export').onclick = () => {
+    const blob = new Blob([store.exportJSON(state)], { type:'application/json' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob); a.download = 'pfai-data.json'; a.click();
+  };
+  $('#reset').onclick = () => {
+    if (confirm('Erase all saved assessments, logs and settings on this device?')) {
+      localStorage.clear(); state = store.loadState(); toast('All data cleared.'); render();
+    }
+  };
+};
+function sparkline(points, h=90) {
+  if (points.length < 2) {
+    const v = points[0]?.value ?? 0;
+    return `<svg class="spark" viewBox="0 0 300 ${h}"><text x="6" y="${h/2}" fill="#9fb0c9" font-size="12">${v} (need 2+ points)</text></svg>`;
+  }
+  const vals = points.map(p=>p.value);
+  const min = Math.min(...vals), max = Math.max(...vals);
+  const range = max-min || 1;
+  const step = 300/(points.length-1);
+  const path = points.map((p,i)=>`${i?'L':'M'}${(i*step).toFixed(1)},${(h-6-((p.value-min)/range)*(h-16)).toFixed(1)}`).join(' ');
+  return `<svg class="spark" viewBox="0 0 300 ${h}">
+    <path d="${path}" fill="none" stroke="var(--accent)" stroke-width="2"/>
+    ${points.map((p,i)=>`<circle cx="${(i*step).toFixed(1)}" cy="${(h-6-((p.value-min)/range)*(h-16)).toFixed(1)}" r="3" fill="var(--accent)"/>`).join('')}
+  </svg>`;
+}
+
