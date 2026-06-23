@@ -1,7 +1,7 @@
 // PFAi — app shell: state, routing, and views.
 import { scoreAssessment, gapAnalysis, whatIf, bodyComposition, fmtTime, parseTime, round1 }
   from './scoring.js';
-import { STANDARD, BANDS, tableFor, setRuleset, getRulesetId, getRuleset, listRulesets, componentsFor }
+import { STANDARD, BANDS, tableFor, setRuleset, getRulesetId, getRuleset, listRulesets, componentsFor, bracketFor, setAltitude }
   from './data/standards.js';
 import { generateRegimen, daysUntil } from './regimen.js';
 import { parseNaturalLanguage } from './parser.js';
@@ -20,6 +20,7 @@ function exLabel(comp, id) {
 let state = store.loadState();
 // Activate the persisted ruleset before deriving anything from STANDARD.
 setRuleset(state.settings.ruleset || 'legacy');
+setAltitude(state.settings.altitudeFt || 0);
 // Working assessment input (not yet saved). Rehydrate from the most recent
 // saved assessment so What-If / Plan stay usable across reloads.
 let draft = (() => {
@@ -53,12 +54,30 @@ let currentView = viewFromHash();
 const app = document.getElementById('app');
 const $ = (s, r = document) => r.querySelector(s);
 
+// Delegated actions survive innerHTML re-renders of view content.
+app.addEventListener('click', (e) => {
+  const a = e.target.closest('[data-action]');
+  if (a?.dataset.action === 'print') printScorecard();
+});
+
 // ── Routing ──────────────────────────────────────────────────────────────
 // Hash-based so refresh, back/forward and deep links all work.
-document.getElementById('tabs').addEventListener('click', (e) => {
+const tabsEl = document.getElementById('tabs');
+tabsEl.addEventListener('click', (e) => {
   const btn = e.target.closest('button[data-view]');
   if (!btn) return;
   location.hash = btn.dataset.view; // triggers the hashchange handler below
+});
+// Keyboard: ←/→ (and Home/End) move between tabs; 1–7 jump directly.
+tabsEl.addEventListener('keydown', (e) => {
+  const i = VALID_VIEWS.indexOf(currentView);
+  let next = null;
+  if (e.key === 'ArrowRight') next = (i + 1) % VALID_VIEWS.length;
+  else if (e.key === 'ArrowLeft') next = (i - 1 + VALID_VIEWS.length) % VALID_VIEWS.length;
+  else if (e.key === 'Home') next = 0;
+  else if (e.key === 'End') next = VALID_VIEWS.length - 1;
+  else if (/^[1-7]$/.test(e.key)) next = +e.key - 1;
+  if (next != null) { e.preventDefault(); location.hash = VALID_VIEWS[next]; tabsEl.querySelector('button.active')?.focus(); }
 });
 window.addEventListener('hashchange', () => {
   currentView = viewFromHash();
@@ -67,8 +86,12 @@ window.addEventListener('hashchange', () => {
   render();
 });
 function syncTabs() {
-  document.querySelectorAll('#tabs button[data-view]').forEach((b) =>
-    b.classList.toggle('active', b.dataset.view === currentView));
+  document.querySelectorAll('#tabs button[data-view]').forEach((b) => {
+    const on = b.dataset.view === currentView;
+    b.classList.toggle('active', on);
+    b.setAttribute('aria-selected', on ? 'true' : 'false');
+    b.tabIndex = on ? 0 : -1;
+  });
 }
 
 function render() {
@@ -229,7 +252,57 @@ function resultPanel() {
   <h3 style="margin-top:16px">Where to improve <span class="pill">cheapest points first</span></h3>
   <ul class="clean">${improve}</ul>
   ${bodyPanel(body)}
+  <div style="margin-top:14px"><button class="btn secondary" data-action="print">Print / save scorecard</button></div>
   <p class="cite">Scored under ${STANDARD.reference} ruleset v${STANDARD.rulesetVersion}.</p>`;
+}
+
+// Open a clean, printable scorecard for the current assessment.
+function printScorecard() {
+  const r = currentResult();
+  if (r.enteredCount === 0) return toast('Enter at least one component first.');
+  const body = currentBody();
+  const br = bracketFor(draft.age);
+  const rows = ['aerobic', 'strength', 'core'].map((comp) => {
+    const c = r.components[comp];
+    if (!c) return `<tr><td>${cap(comp)}</td><td>—</td><td>—</td><td>not entered</td></tr>`;
+    const raw = TIME_EXERCISES.has(c.exercise) ? fmtTime(c.raw) : c.raw;
+    return `<tr><td>${cap(comp)} — ${exLabel(comp, c.exercise)}${c.table?.official === false ? ' (est.)' : ''}</td>
+      <td>${raw}</td><td>${c.points}/${c.maxPoints}</td><td>${c.meetsMin ? 'meets min' : 'BELOW MIN'}</td></tr>`;
+  }).join('');
+  const bodyRows = body.checked
+    ? `<tr><td>Height / weight</td><td>${state.profile.weight} lb</td><td>max ${body.maxWeight}</td><td>${body.hwPass ? 'pass' : 'over'}</td></tr>`
+    + (body.waistPass != null ? `<tr><td>Waist</td><td>${state.profile.waist}"</td><td>max ${body.waistMax}"</td><td>${body.waistPass ? 'pass' : 'over'}</td></tr>` : '')
+    : '';
+  const status = r.complete ? (r.pass ? 'PASS' : 'FAIL') : `Partial (${r.enteredCount}/3)`;
+  const today = new Date().toISOString().slice(0, 10);
+  const html = `<!doctype html><meta charset="utf-8"><title>PFAi scorecard</title>
+  <style>
+    body{font:14px -apple-system,Segoe UI,Roboto,sans-serif;color:#111;margin:40px;max-width:680px}
+    h1{font-size:20px;margin:0 0 2px} .sub{color:#666;font-size:12px;margin-bottom:18px}
+    .hero{display:flex;gap:18px;align-items:baseline;margin:14px 0}
+    .score{font:600 44px ui-monospace,monospace} .status{font-weight:700;font-size:18px}
+    table{width:100%;border-collapse:collapse;margin:14px 0} th,td{text-align:left;padding:8px 6px;border-bottom:1px solid #ddd;font-size:13px}
+    th{color:#666;font-weight:600;text-transform:uppercase;font-size:10px;letter-spacing:.06em}
+    .meta{color:#444;font-size:12px} .disc{color:#888;font-size:10px;margin-top:24px;line-height:1.5;border-top:1px solid #ddd;padding-top:12px}
+    @media print{body{margin:0}}
+  </style>
+  <h1>PFAi — Fitness Assessment Scorecard</h1>
+  <div class="sub">${STANDARD.reference} · ruleset v${STANDARD.rulesetVersion} · generated ${today}</div>
+  <div class="meta">${cap(draft.sex)} · age ${draft.age} (${br.label} bracket)</div>
+  <div class="hero"><span class="score">${r.composite}</span><span>/ 100</span>
+    <span class="status" style="color:${r.complete ? (r.pass ? '#2f7d32' : '#c0392b') : '#888'}">${status}</span>
+    <span>${r.band.label}</span></div>
+  <table><thead><tr><th>Component</th><th>Result</th><th>Points</th><th>Status</th></tr></thead>
+    <tbody>${rows}${bodyRows}</tbody></table>
+  <div class="disc">Unofficial estimate for training preparation — not affiliated with the U.S. Air Force or DoD,
+    and not an official assessment of record. Legacy run/push-up/sit-up minimums and max-point thresholds
+    follow the official USAF scoring charts; intermediate points are interpolated. Confirm against current
+    DAFMAN 36-2905 and your unit fitness program manager.</div>
+  <script>window.onload=function(){window.print()}<\/script>`;
+  const w = window.open('', '_blank');
+  if (!w) return toast('Allow pop-ups to print your scorecard.');
+  w.document.write(html);
+  w.document.close();
 }
 
 function verdictText(r) {
@@ -374,6 +447,8 @@ VIEWS.plan = function () {
       </div>
       <label>Injuries / limitations</label>
       <input id="s-inj" placeholder="e.g. knee, shoulder, back" value="${state.settings.injuries||''}">
+      <label>Test altitude (ft) <span class="pill">relaxes run · est.</span></label>
+      <input id="s-alt" type="number" min="0" max="15000" step="100" placeholder="e.g. 0 (sea level)" value="${state.settings.altitudeFt||''}">
       <div style="margin-top:12px"><button class="btn" id="gen">Generate plan</button></div>
     </div>
     <div class="card" id="plan-card"><h2>Your regimen</h2><p class="hint">Set your details and generate a periodised plan focused on your highest-value gaps.</p></div>
@@ -385,6 +460,7 @@ WIRES.plan = function () {
   $('#s-days').oninput = (e)=>{ state.settings.daysPerWeek=clamp(+e.target.value||4,2,7); persist(); };
   $('#s-equip').onchange = (e)=>{ state.settings.equipment=e.target.value; persist(); };
   $('#s-inj').oninput = (e)=>{ state.settings.injuries=e.target.value; persist(); };
+  $('#s-alt').oninput = (e)=>{ state.settings.altitudeFt=clamp(+e.target.value||0,0,15000); setAltitude(state.settings.altitudeFt); persist(); };
   $('#gen').onclick = () => {
     const r = currentResult();
     if (r.enteredCount===0) return toast('Add your scores on the Assess tab first.');
