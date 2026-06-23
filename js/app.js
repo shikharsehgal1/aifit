@@ -1,24 +1,25 @@
 // PFAi — app shell: state, routing, and views.
 import { scoreAssessment, gapAnalysis, whatIf, bodyComposition, fmtTime, parseTime, round1 }
   from './scoring.js';
-import { STANDARD, BANDS, tableFor } from './data/standards.js';
+import { STANDARD, BANDS, tableFor, setRuleset, getRulesetId, getRuleset, listRulesets, componentsFor }
+  from './data/standards.js';
 import { generateRegimen, daysUntil } from './regimen.js';
 import { parseNaturalLanguage } from './parser.js';
 import * as store from './storage.js';
 import { estimateProportions, detectorError } from './camera.js';
 
-const EXERCISES = {
-  aerobic: [{ id: 'run_1_5mi', label: '1.5-mile run (mm:ss)' }, { id: 'hamr', label: 'HAMR shuttles' }],
-  strength: [{ id: 'pushups', label: 'Push-ups (reps)' }, { id: 'hrp', label: 'Hand-release push-ups' }],
-  core: [
-    { id: 'situps', label: 'Sit-ups (reps)' },
-    { id: 'crunches', label: 'Cross-leg crunches' },
-    { id: 'plank', label: 'Forearm plank (mm:ss)' },
-  ],
-};
-const TIME_EXERCISES = new Set(['run_1_5mi', 'plank']);
+const TIME_EXERCISES = new Set(['run_1_5mi', 'run_2mi', 'plank']);
+// Exercise options for a component come from the active ruleset.
+function exercisesFor(comp) {
+  return componentsFor().find((c) => c.id === comp)?.exercises ?? [];
+}
+function exLabel(comp, id) {
+  return exercisesFor(comp).find((e) => e.id === id)?.label ?? id;
+}
 
 let state = store.loadState();
+// Activate the persisted ruleset before deriving anything from STANDARD.
+setRuleset(state.settings.ruleset || 'legacy');
 // Working assessment input (not yet saved). Rehydrate from the most recent
 // saved assessment so What-If / Plan stay usable across reloads.
 let draft = (() => {
@@ -30,6 +31,18 @@ let draft = (() => {
     components: { aerobic: { exercise: 'run_1_5mi', raw: '' }, strength: { exercise: 'pushups', raw: '' }, core: { exercise: 'plank', raw: '' } },
   };
 })();
+// Snap each component to an exercise the active ruleset actually offers,
+// clearing the raw value when the event changes (units may differ).
+function normalizeDraftToRuleset() {
+  for (const comp of ['aerobic', 'strength', 'core']) {
+    const opts = exercisesFor(comp);
+    const cur = draft.components[comp];
+    if (opts.length && !opts.some((e) => e.id === cur.exercise)) {
+      draft.components[comp] = { exercise: opts[0].id, raw: '' };
+    }
+  }
+}
+normalizeDraftToRuleset();
 const VALID_VIEWS = ['assess', 'simulator', 'plan', 'progress', 'scan', 'leader', 'about'];
 function viewFromHash() {
   const v = location.hash.replace(/^#\/?/, '');
@@ -160,7 +173,7 @@ VIEWS.assess = function () {
 
 function compInputBlock(comp) {
   const c = draft.components[comp];
-  const opts = EXERCISES[comp].map((e) => `<option value="${e.id}" ${c.exercise===e.id?'selected':''}>${e.label}</option>`).join('');
+  const opts = exercisesFor(comp).map((e) => `<option value="${e.id}" ${c.exercise===e.id?'selected':''}>${e.label}</option>`).join('');
   return `
   <div class="row" style="align-items:flex-end">
     <div><label>${cap(comp)} — exercise</label><select data-ex="${comp}">${opts}</select></div>
@@ -185,8 +198,9 @@ function resultPanel() {
     if (!c) return `<div class="comp-bar"><div class="top"><span>${cap(comp)}</span><span class="pill">not entered</span></div></div>`;
     const fillPct = (c.points / c.maxPoints) * 100;
     const color = c.meetsMin ? (fillPct>=85?'var(--accent-2)':'var(--accent)') : 'var(--fail)';
+    const estTag = c.table?.official === false ? ' <span class="pill" title="estimated — official chart pending">est</span>' : '';
     return `<div class="comp-bar">
-      <div class="top"><span>${cap(comp)} <span class="pill">${EXERCISES[comp].find(e=>e.id===c.exercise).label.split(' (')[0]}</span></span>
+      <div class="top"><span>${cap(comp)} <span class="pill">${exLabel(comp, c.exercise)}</span>${estTag}</span>
         <span>${c.points}/${c.maxPoints} pts ${c.meetsMin?'':'<span class="tag-fail">⚠ below min</span>'}</span></div>
       <div class="track"><div class="fill" style="width:${fillPct}%;background:${color}"></div></div>
     </div>`;
@@ -555,18 +569,39 @@ WIRES.leader = function () {
 
 // ── View: ABOUT / STANDARDS ─────────────────────────────────────────────────
 VIEWS.about = function () {
+  const active = getRuleset();
+  const weights = Object.entries(STANDARD.weights).map(([k, v]) => `${cap(k)} ${v}`).join(' / ');
+  const rsOpts = listRulesets().map((r) =>
+    `<option value="${r.id}" ${r.id===getRulesetId()?'selected':''}>${r.label}</option>`).join('');
+  const previewBanner = active.preview
+    ? `<div class="warn-box" style="margin-bottom:14px">⚠ <b>Preview ruleset.</b> The PFRA-2026 point tables are provisional pending official publication, and the 20-point waist-to-height component is not yet scored here. Switch to the Legacy ruleset for scored assessments.</div>`
+    : '';
   return `<div class="card">
     <h2>Standards & data provenance</h2>
+    ${previewBanner}
+    <label>Active ruleset</label>
+    <select id="rs-select">${rsOpts}</select>
+    <div style="margin-top:16px"></div>
     <div class="kv"><span>Authority</span><b>${STANDARD.authority}</b></div>
     <div class="kv"><span>Reference</span><b>${STANDARD.reference}</b></div>
     <div class="kv"><span>Ruleset version</span><b>${STANDARD.rulesetVersion}</b></div>
-    <div class="kv"><span>Composite weighting</span><b>Aerobic ${STANDARD.weights.aerobic} / Strength ${STANDARD.weights.strength} / Core ${STANDARD.weights.core}</b></div>
+    <div class="kv"><span>Composite weighting</span><b>${weights}</b></div>
     <div class="kv"><span>Pass mark</span><b>≥ ${STANDARD.passComposite} composite + every component minimum</b></div>
     <div class="warn-box" style="margin-top:12px">${STANDARD.effectiveNote}</div>
     <h3 style="margin-top:16px">Bands</h3>
     <ul class="clean">${BANDS.map(b=>`<li><span class="badge" style="background:${b.color};color:#02132b">${b.label}</span> &nbsp; ${b.min}–${b.max===100?100:Math.floor(b.max)}</li>`).join('')}</ul>
-    <p class="cite">Every score in this app is traceable to this ruleset version. When official DAFMAN 36-2905 charts are entered, bump the version so previously-saved assessments remain attributable to the standard they were scored under.</p>
+    <p class="cite">1.5-mile run, push-up and sit-up tables carry official component minimums and maximum-point thresholds for all nine 5-year age brackets (both sexes); intermediate points are interpolated between official anchors. Events marked <span class="pill">est</span> are estimates pending verbatim transcription. Sources: USAF Fitness Assessment Scoring charts (Final Version), 2022.</p>
   </div>`;
+};
+WIRES.about = function () {
+  $('#rs-select').onchange = (e) => {
+    setRuleset(e.target.value);
+    state.settings.ruleset = e.target.value;
+    persist();
+    normalizeDraftToRuleset();
+    render();
+    toast(`Switched to ${getRuleset().label}.`);
+  };
 };
 
 // ── boot ─────────────────────────────────────────────────────────────────
