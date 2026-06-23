@@ -424,3 +424,52 @@ function sparkline(points, h=90) {
   </svg>`;
 }
 
+// ── View: BODY SCAN (experimental) ─────────────────────────────────────────
+VIEWS.scan = function () {
+  return `<div class="card">
+    <h2>Body Scan <span class="beta">experimental</span></h2>
+    <div class="warn-box">This is an experimental on-device estimate, <b>not</b> a measurement or medical tool, and <b>not</b> valid for official body-composition determinations. A single 2D photo cannot replace an in-person tape test. Nothing is uploaded — all processing happens in your browser. Always verify with a real tape measurement.</div>
+    <div class="scan-wrap" style="margin-top:12px">
+      <video id="cam" autoplay playsinline muted></video>
+      <canvas id="overlay"></canvas>
+    </div>
+    <div class="row" style="margin-top:10px">
+      <button class="btn" id="cam-start">Start camera</button>
+      <button class="btn secondary" id="cam-capture">Estimate proportions</button>
+    </div>
+    <div id="scan-out" style="margin-top:12px"></div>
+  </div>`;
+};
+WIRES.scan = function () {
+  const video = $('#cam'); const out = $('#scan-out'); let stream = null;
+  $('#cam-start').onclick = async () => {
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user', width: 640 } });
+      video.srcObject = stream;
+      out.innerHTML = '<p class="hint">Stand back so your whole body (head to ankles) is in frame, good lighting, plain background.</p>';
+    } catch (err) {
+      out.innerHTML = `<div class="warn-box">Camera unavailable: ${err.message}. You can still enter your waist manually on the Assess tab.</div>`;
+    }
+  };
+  $('#cam-capture').onclick = async () => {
+    if (!stream) return toast('Start the camera first.');
+    out.innerHTML = '<p class="hint">Analysing…</p>';
+    try {
+      const est = await estimateProportions(video, state.profile.height);
+      if (!est.ok) { out.innerHTML = `<div class="warn-box">${est.reason}</div>`; return; }
+      out.innerHTML = `
+        <div class="muted-box">
+          <div class="kv"><span>Waist proxy (rough)</span><b>${est.waistProxyIn ?? '—'} in</b></div>
+          <div class="kv"><span>Shoulder:hip ratio</span><b>${est.shoulderHipRatio}</b></div>
+          <div class="kv"><span>Confidence</span><b>${est.confidence}</b></div>
+          <p class="cite">${est.note}</p>
+          ${est.waistProxyIn ? `<button class="btn secondary" id="apply-waist">Use ${est.waistProxyIn}" as my waist (editable)</button>` : ''}
+        </div>`;
+      const apply = $('#apply-waist');
+      if (apply) apply.onclick = () => { state.profile.waist = est.waistProxyIn; persist(); toast('Applied to your profile — verify with a tape measure.'); };
+    } catch (err) {
+      out.innerHTML = `<div class="warn-box">${detectorError() || err.message}</div>`;
+    }
+  };
+};
+
