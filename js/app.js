@@ -473,3 +473,35 @@ WIRES.scan = function () {
   };
 };
 
+// ── View: LEADER ───────────────────────────────────────────────────────────
+VIEWS.leader = function () {
+  const members = state.unit.members;
+  const ready = members.filter(m=>m.composite>=75).length;
+  const rows = members.map((m,i)=>`<div class="member">
+    <span>${m.name}</span>
+    <span><span class="badge" style="background:${m.composite>=75?'var(--accent-2)':'var(--fail)'};color:#02132b">${m.composite}</span>
+    <button class="btn secondary" data-del="${i}" style="padding:4px 8px">✕</button></span>
+  </div>`).join('') || '<p class="hint">No members yet. This is a local demo of a unit-readiness roll-up for flight/squadron leaders.</p>';
+  return `<div class="card">
+    <h2>Leader View <span class="pill">unit readiness (local demo)</span></h2>
+    <p class="hint">Aggregate readiness for the people you manage. In production this would sync from members' accounts with appropriate authorization — here it's a manual local demo.</p>
+    <div class="score-hero" style="margin:10px 0">
+      <div class="dial" style="--pct:${members.length?Math.round(ready/members.length*100):0};--dial-color:var(--accent-2)">
+        <div class="num"><b>${ready}/${members.length||0}</b><span>ready</span></div>
+      </div>
+      <div class="hint">${members.length?`${Math.round(ready/members.length*100)}% of your unit is currently passing (composite ≥ 75).`:''}</div>
+    </div>
+    <div class="row"><input id="m-name" placeholder="Member name"><input id="m-score" type="number" min="0" max="100" placeholder="Composite"></div>
+    <div style="margin-top:8px"><button class="btn" id="m-add">Add member</button></div>
+    <div style="margin-top:14px">${rows}</div>
+  </div>`;
+};
+WIRES.leader = function () {
+  $('#m-add').onclick = () => {
+    const name = $('#m-name').value.trim(); const score = clamp(+$('#m-score').value||0,0,100);
+    if (!name) return toast('Enter a name.');
+    state.unit.members.push({ name, composite: score }); persist(); render();
+  };
+  app.querySelectorAll('[data-del]').forEach((b)=>{ b.onclick=()=>{ state.unit.members.splice(+b.dataset.del,1); persist(); render(); }; });
+};
+
