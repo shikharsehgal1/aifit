@@ -25,11 +25,11 @@ export const STANDARD = {
 
 // Clean, non-overlapping performance bands for the composite score.
 export const BANDS = [
-  { key: 'fail', label: 'Fail', min: 0, max: 74.99, color: '#d64545' },
-  { key: 'marginal', label: 'Marginal', min: 75, max: 79.99, color: '#e08a1e' },
-  { key: 'satisfactory', label: 'Satisfactory', min: 80, max: 89.99, color: '#3b82c4' },
-  { key: 'excellent', label: 'Excellent', min: 90, max: 99.99, color: '#2f9e6f' },
-  { key: 'max', label: 'Maximum', min: 100, max: 100, color: '#1f7a52' },
+  { key: 'fail', label: 'Fail', min: 0, max: 74.99, color: '#f87171' },
+  { key: 'marginal', label: 'Marginal', min: 75, max: 79.99, color: '#fbbf24' },
+  { key: 'satisfactory', label: 'Satisfactory', min: 80, max: 89.99, color: '#60a5fa' },
+  { key: 'excellent', label: 'Excellent', min: 90, max: 99.99, color: '#34d399' },
+  { key: 'max', label: 'Maximum', min: 100, max: 100, color: '#bef264' },
 ];
 
 export function bandFor(score) {
