@@ -505,3 +505,24 @@ WIRES.leader = function () {
   app.querySelectorAll('[data-del]').forEach((b)=>{ b.onclick=()=>{ state.unit.members.splice(+b.dataset.del,1); persist(); render(); }; });
 };
 
+// ── View: ABOUT / STANDARDS ─────────────────────────────────────────────────
+VIEWS.about = function () {
+  return `<div class="card">
+    <h2>Standards & data provenance</h2>
+    <div class="kv"><span>Authority</span><b>${STANDARD.authority}</b></div>
+    <div class="kv"><span>Reference</span><b>${STANDARD.reference}</b></div>
+    <div class="kv"><span>Ruleset version</span><b>${STANDARD.rulesetVersion}</b></div>
+    <div class="kv"><span>Composite weighting</span><b>Aerobic ${STANDARD.weights.aerobic} / Strength ${STANDARD.weights.strength} / Core ${STANDARD.weights.core}</b></div>
+    <div class="kv"><span>Pass mark</span><b>≥ ${STANDARD.passComposite} composite + every component minimum</b></div>
+    <div class="warn-box" style="margin-top:12px">${STANDARD.effectiveNote}</div>
+    <h3 style="margin-top:16px">Bands</h3>
+    <ul class="clean">${BANDS.map(b=>`<li><span class="badge" style="background:${b.color};color:#02132b">${b.label}</span> &nbsp; ${b.min}–${b.max===100?100:Math.floor(b.max)}</li>`).join('')}</ul>
+    <p class="cite">Every score in this app is traceable to this ruleset version. When official DAFMAN 36-2905 charts are entered, bump the version so previously-saved assessments remain attributable to the standard they were scored under.</p>
+  </div>`;
+};
+
+// ── boot ─────────────────────────────────────────────────────────────────
+function cap(s){ return s.charAt(0).toUpperCase()+s.slice(1); }
+function clamp(n,lo,hi){ return Math.max(lo,Math.min(hi,n)); }
+function VIEWS(){} function WIRES(){} // namespaces (hoisted below as objects)
+render();
