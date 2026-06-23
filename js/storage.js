@@ -6,7 +6,7 @@ const KEY = 'pfai.state.v1';
 const DEFAULT = {
   profile: { sex: 'male', age: 25, height: 70, weight: 180, waist: 36, branch: 'usaf' },
   goal: { date: null, target: 'pass' }, // target: 'pass' | 'satisfactory' | 'excellent'
-  settings: { daysPerWeek: 4, equipment: 'gym', injuries: '', reminders: false, ruleset: 'legacy' },
+  settings: { daysPerWeek: 4, equipment: 'gym', injuries: '', reminders: false, ruleset: 'legacy', altitudeFt: 0 },
   assessments: [], // { ts, input, result }
   logs: [], // workout log entries { ts, type, note, done }
   achievements: [], // earned badge keys

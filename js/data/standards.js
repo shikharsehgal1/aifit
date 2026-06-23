@@ -182,6 +182,14 @@ export function setRuleset(id) {
 }
 export function getRulesetId() { return activeId; }
 export function getRuleset() { return RULESETS[activeId]; }
+
+// Altitude adjustment for the aerobic run. The USAF allows extra run time at
+// high-altitude installations; the exact per-band correction isn't embedded
+// here, so this is an ESTIMATE: ~8 s added per 1000 ft above 3000 ft.
+let altitudeFt = 0;
+export function setAltitude(ft) { altitudeFt = Math.max(0, Math.min(15000, Math.round(ft) || 0)); }
+export function getAltitude() { return altitudeFt; }
+function runAltitudeOffset() { return altitudeFt > 3000 ? Math.round((altitudeFt - 3000) / 1000 * 8) : 0; }
 export function listRulesets() {
   return Object.values(RULESETS).map((r) => ({ id: r.id, label: r.label, preview: r.preview }));
 }
@@ -220,6 +228,11 @@ export function tableFor(sex, age, component, exercise) {
 
   if (!t) return null;
   if (t.unit === 'reps') t = scaleMax(t, repMax);
+  // Relax run times at altitude (estimate).
+  const off = runAltitudeOffset();
+  if (off && t.betterDirection === 'lower') {
+    t = { ...t, min: t.min + off, anchors: t.anchors.map(([s, p]) => [s + off, p]), altitudeOffset: off };
+  }
   return { ...t, bracket: br };
 }
 
