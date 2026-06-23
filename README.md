@@ -25,7 +25,11 @@ camera (`getUserMedia`) and ES modules work.
 | **Progress** | ✅ Real | Composite + per-component trend sparklines, achievements/badges, workout count, JSON export, reset. |
 | **Body Scan** | 🧪 Experimental | On-device TF.js MoveNet pose estimate of body *proportions* → rough waist proxy. **Not** a measurement or medical tool; honest disclaimers throughout; manual override required. |
 | **Leader View** | 🟡 Demo | Local unit-readiness roll-up. Production needs accounts + authorization + sync. |
-| **Standards** | ✅ Real | Shows the ruleset, weighting, bands, and data-provenance warning. |
+| **Standards** | ✅ Real | Switchable ruleset (Legacy / PFRA-2026 preview), weighting, bands, data provenance. |
+
+Also: **installable PWA** that works offline (app shell cached; pose model stays
+online by design), **printable scorecard** export, optional **altitude-adjusted
+run** scoring, hash routing/deep links, and keyboard tab navigation.
 
 ## Scoring data & fidelity
 
@@ -69,7 +73,8 @@ js/
 ## Not yet built (next steps)
 
 - Verbatim transcription of the alternate-event charts (HAMR, HRP, cross-leg
-  crunch, plank) and the official PFRA-2026 point tables; altitude adjustment
+  crunch, plank) and the official PFRA-2026 point tables (current altitude
+  adjustment and intermediate points are interpolated — see fidelity note above)
 - Component medical-exemption handling in composite logic
 - Multi-branch standards (Army ACFT, Navy PRT, Marine PFT/CFT) — engine is branch-agnostic
 - Wearable import (Apple Health / Garmin)
