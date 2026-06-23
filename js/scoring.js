@@ -16,8 +16,11 @@ function interpolatePoints(table, raw) {
   const anchors = [...table.anchors].sort((a, b) => a[0] - b[0]);
   const lo = anchors[0];
   const hi = anchors[anchors.length - 1];
-  if (raw <= lo[0]) return table.betterDirection === 'higher' ? lo[1] : hi[1];
-  if (raw >= hi[0]) return table.betterDirection === 'higher' ? hi[1] : lo[1];
+  // Out of range → clamp to the points stored at the nearest anchor. Points are
+  // stored alongside their raw value, so this is correct for both directions
+  // (e.g. a run faster than the max-point time scores the max-point value).
+  if (raw <= lo[0]) return lo[1];
+  if (raw >= hi[0]) return hi[1];
   for (let i = 0; i < anchors.length - 1; i++) {
     const [x0, y0] = anchors[i];
     const [x1, y1] = anchors[i + 1];
