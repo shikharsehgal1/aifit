@@ -19,25 +19,44 @@ const EXERCISES = {
 const TIME_EXERCISES = new Set(['run_1_5mi', 'plank']);
 
 let state = store.loadState();
-// Working assessment input (not yet saved).
-let draft = {
-  sex: state.profile.sex,
-  age: state.profile.age,
-  components: { aerobic: { exercise: 'run_1_5mi', raw: '' }, strength: { exercise: 'pushups', raw: '' }, core: { exercise: 'plank', raw: '' } },
-};
-let currentView = 'assess';
+// Working assessment input (not yet saved). Rehydrate from the most recent
+// saved assessment so What-If / Plan stay usable across reloads.
+let draft = (() => {
+  const last = state.assessments.at(-1)?.input;
+  if (last?.components) return structuredClone(last);
+  return {
+    sex: state.profile.sex,
+    age: state.profile.age,
+    components: { aerobic: { exercise: 'run_1_5mi', raw: '' }, strength: { exercise: 'pushups', raw: '' }, core: { exercise: 'plank', raw: '' } },
+  };
+})();
+const VALID_VIEWS = ['assess', 'simulator', 'plan', 'progress', 'scan', 'leader', 'about'];
+function viewFromHash() {
+  const v = location.hash.replace(/^#\/?/, '');
+  return VALID_VIEWS.includes(v) ? v : 'assess';
+}
+let currentView = viewFromHash();
 
 const app = document.getElementById('app');
 const $ = (s, r = document) => r.querySelector(s);
 
 // ── Routing ──────────────────────────────────────────────────────────────
+// Hash-based so refresh, back/forward and deep links all work.
 document.getElementById('tabs').addEventListener('click', (e) => {
   const btn = e.target.closest('button[data-view]');
   if (!btn) return;
-  currentView = btn.dataset.view;
-  [...e.currentTarget.children].forEach((b) => b.classList.toggle('active', b === btn));
+  location.hash = btn.dataset.view; // triggers the hashchange handler below
+});
+window.addEventListener('hashchange', () => {
+  currentView = viewFromHash();
+  syncTabs();
+  app.scrollIntoView({ block: 'start', behavior: 'smooth' });
   render();
 });
+function syncTabs() {
+  document.querySelectorAll('#tabs button[data-view]').forEach((b) =>
+    b.classList.toggle('active', b.dataset.view === currentView));
+}
 
 function render() {
   renderCountdown();
@@ -83,9 +102,29 @@ function currentBody() {
   });
 }
 
+// ── Hero / landing ─────────────────────────────────────────────────────────
+function heroMarkup() {
+  const w = STANDARD.weights;
+  return `
+  <section class="hero">
+    <div class="hero-eyebrow">USAF · ${STANDARD.reference.split(',')[0]}</div>
+    <h2 class="hero-title">Know your score<br>before test day.</h2>
+    <p class="hero-sub">Enter your run, strength and core numbers — PFAi computes your weighted
+      composite, flags every component minimum, and shows the cheapest points to your next
+      band. Instant, private, and fully on-device.</p>
+    <div class="hero-stats">
+      <div class="hstat"><b>${w.aerobic}/${w.strength}/${w.core}</b><span>Aerobic / Strength / Core</span></div>
+      <div class="hstat"><b>≥${STANDARD.passComposite}</b><span>Composite to pass</span></div>
+      <div class="hstat"><b>${BANDS.length}</b><span>Performance bands</span></div>
+      <div class="hstat"><b>100%</b><span>On-device · no upload</span></div>
+    </div>
+  </section>`;
+}
+
 // ── View: ASSESS ─────────────────────────────────────────────────────────
 VIEWS.assess = function () {
   return `
+  ${heroMarkup()}
   <div class="grid two">
     <div class="card">
       <h2>Your details</h2>
@@ -255,7 +294,7 @@ function applyParsed(p) {
 VIEWS.simulator = function () {
   const r = currentResult();
   if (r.enteredCount === 0)
-    return `<div class="card"><h2>What-If Simulator</h2><p class="hint">Enter your current numbers on the <b>Assess</b> tab first, then come back to experiment.</p></div>`;
+    return `<div class="card"><h2>What-If Simulator</h2><p class="hint">Enter your current numbers on the Assess tab first, then come back to experiment.</p><div style="margin-top:12px"><a class="btn secondary" href="#assess">Go to Assess →</a></div></div>`;
   const sliders = ['aerobic','strength','core'].map((comp) => {
     const c = r.components[comp];
     if (!c) return '';
@@ -355,8 +394,11 @@ function planMarkup(reg) {
         <input type="checkbox" data-log="${w.week}-${i}" title="mark done">
       </div>`).join('')}
     </div>`).join('');
+  const legend = `<div class="legend">${Object.entries(colors).map(([k,c]) =>
+    `<span><i style="background:${c}"></i>${cap(k)}</span>`).join('')}</div>`;
   return `<h2>Your regimen <span class="pill">${reg.weeks} weeks</span></h2>
-    <div class="muted-box" style="margin-bottom:10px">${reg.rationale.map(l=>`<div>${l}</div>`).join('')}</div>
+    <div class="muted-box" style="margin-bottom:14px">${reg.rationale.map(l=>`<div>${l}</div>`).join('')}</div>
+    ${legend}
     ${weeks}`;
 }
 function wirePlanLog() {
@@ -377,10 +419,12 @@ VIEWS.progress = function () {
   const comp = store.trendSeries(state, 'composite');
   const series = ['aerobic','strength','core'].map((k)=>({k,data:store.trendSeries(state,k)}));
   const badges = state.achievements.map((k)=>`<span class="badge" style="background:var(--panel-2)">🏅 ${store.badgeLabel(k)}</span>`).join(' ') || '<span class="hint">No badges yet — save an assessment to start.</span>';
+  const latest = comp.at(-1)?.value;
+  const peak = comp.length ? Math.max(...comp.map(p=>p.value)) : null;
   return `<div class="grid two">
     <div class="card">
       <h2>Composite trend</h2>
-      ${comp.length ? sparkline(comp) : '<p class="hint">Save assessments over time to see your trend.</p>'}
+      ${comp.length ? `<div class="trend-head"><div><b>${latest}</b><span>latest</span></div><div><b>${peak}</b><span>peak</span></div><div><b>${comp.length}</b><span>logged</span></div></div>${sparkline(comp)}` : '<p class="hint">Save assessments over time to see your trend.</p>'}
       <div style="margin-top:14px">${series.map(s=>s.data.length?`<div class="comp-bar"><div class="top"><span>${cap(s.k)}</span><span>${s.data.at(-1).value} pts</span></div>${sparkline(s.data,40)}</div>`:'').join('')}</div>
     </div>
     <div class="card">
@@ -411,16 +455,20 @@ WIRES.progress = function () {
 function sparkline(points, h=90) {
   if (points.length < 2) {
     const v = points[0]?.value ?? 0;
-    return `<svg class="spark" viewBox="0 0 300 ${h}"><text x="6" y="${h/2}" fill="#9fb0c9" font-size="12">${v} (need 2+ points)</text></svg>`;
+    return `<svg class="spark" viewBox="0 0 300 ${h}"><text x="6" y="${h/2}" fill="#8b8b94" font-size="12" font-family="monospace">${v} · need 2+ points</text></svg>`;
   }
   const vals = points.map(p=>p.value);
   const min = Math.min(...vals), max = Math.max(...vals);
   const range = max-min || 1;
   const step = 300/(points.length-1);
-  const path = points.map((p,i)=>`${i?'L':'M'}${(i*step).toFixed(1)},${(h-6-((p.value-min)/range)*(h-16)).toFixed(1)}`).join(' ');
-  return `<svg class="spark" viewBox="0 0 300 ${h}">
-    <path d="${path}" fill="none" stroke="var(--accent)" stroke-width="2"/>
-    ${points.map((p,i)=>`<circle cx="${(i*step).toFixed(1)}" cy="${(h-6-((p.value-min)/range)*(h-16)).toFixed(1)}" r="3" fill="var(--accent)"/>`).join('')}
+  const y = (p)=> (h-6-((p.value-min)/range)*(h-16)).toFixed(1);
+  const path = points.map((p,i)=>`${i?'L':'M'}${(i*step).toFixed(1)},${y(p)}`).join(' ');
+  const area = `M0,${h} L${path.slice(1)} L300,${h} Z`;
+  const dots = h>=90 ? points.map((p,i)=>`<circle cx="${(i*step).toFixed(1)}" cy="${y(p)}" r="2.5" fill="var(--accent)"/>`).join('') : '';
+  return `<svg class="spark" viewBox="0 0 300 ${h}" preserveAspectRatio="none">
+    <path d="${area}" fill="var(--accent)" opacity="0.08"/>
+    <path d="${path}" fill="none" stroke="var(--accent)" stroke-width="2" vector-effect="non-scaling-stroke"/>
+    ${dots}
   </svg>`;
 }
 
@@ -525,4 +573,5 @@ VIEWS.about = function () {
 function cap(s){ return s.charAt(0).toUpperCase()+s.slice(1); }
 function clamp(n,lo,hi){ return Math.max(lo,Math.min(hi,n)); }
 function VIEWS(){} function WIRES(){} // namespaces (hoisted below as objects)
+syncTabs();
 render();
