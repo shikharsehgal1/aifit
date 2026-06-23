@@ -303,3 +303,72 @@ WIRES.simulator = function () {
   update();
 };
 
+// ── View: PLAN ──────────────────────────────────────────────────────────
+VIEWS.plan = function () {
+  return `<div class="grid two">
+    <div class="card">
+      <h2>Plan setup</h2>
+      <label>Goal / test date</label><input type="date" id="g-date" value="${state.goal.date||''}">
+      <label>Target</label>
+      <select id="g-target">
+        ${['pass','satisfactory','excellent'].map(t=>`<option value="${t}" ${state.goal.target===t?'selected':''}>${cap(t)}</option>`).join('')}
+      </select>
+      <div class="row">
+        <div><label>Days / week</label><input type="number" id="s-days" min="2" max="7" value="${state.settings.daysPerWeek}"></div>
+        <div><label>Equipment</label><select id="s-equip">
+          ${['gym','home','none'].map(x=>`<option ${state.settings.equipment===x?'selected':''}>${x}</option>`).join('')}
+        </select></div>
+      </div>
+      <label>Injuries / limitations</label>
+      <input id="s-inj" placeholder="e.g. knee, shoulder, back" value="${state.settings.injuries||''}">
+      <div style="margin-top:12px"><button class="btn" id="gen">Generate plan</button></div>
+    </div>
+    <div class="card" id="plan-card"><h2>Your regimen</h2><p class="hint">Set your details and generate a periodised plan focused on your highest-value gaps.</p></div>
+  </div>`;
+};
+WIRES.plan = function () {
+  $('#g-date').onchange = (e)=>{ state.goal.date=e.target.value; persist(); renderCountdown(); };
+  $('#g-target').onchange = (e)=>{ state.goal.target=e.target.value; persist(); };
+  $('#s-days').oninput = (e)=>{ state.settings.daysPerWeek=clamp(+e.target.value||4,2,7); persist(); };
+  $('#s-equip').onchange = (e)=>{ state.settings.equipment=e.target.value; persist(); };
+  $('#s-inj').oninput = (e)=>{ state.settings.injuries=e.target.value; persist(); };
+  $('#gen').onclick = () => {
+    const r = currentResult();
+    if (r.enteredCount===0) return toast('Add your scores on the Assess tab first.');
+    const reg = generateRegimen(r, {
+      goalDate: state.goal.date, daysPerWeek: state.settings.daysPerWeek,
+      equipment: state.settings.equipment, injuries: state.settings.injuries,
+      body: currentBody(),
+    });
+    $('#plan-card').innerHTML = planMarkup(reg);
+    wirePlanLog();
+  };
+};
+function planMarkup(reg) {
+  const colors = { aerobic:'var(--accent)', strength:'var(--warn)', core:'var(--accent-2)', conditioning:'#b06fd0' };
+  const weeks = reg.plan.map((w) => `
+    <div class="week">
+      <h3><span>Week ${w.week}</span><span class="pill">${w.phase}</span></h3>
+      ${w.sessions.map((s,i)=>`<div class="session">
+        <span class="dot" style="background:${colors[s.component]||'#888'}"></span>
+        <span style="flex:1"><b>${cap(s.component)}</b> — ${s.prescription}</span>
+        <input type="checkbox" data-log="${w.week}-${i}" title="mark done">
+      </div>`).join('')}
+    </div>`).join('');
+  return `<h2>Your regimen <span class="pill">${reg.weeks} weeks</span></h2>
+    <div class="muted-box" style="margin-bottom:10px">${reg.rationale.map(l=>`<div>${l}</div>`).join('')}</div>
+    ${weeks}`;
+}
+function wirePlanLog() {
+  app.querySelectorAll('[data-log]').forEach((cb) => {
+    cb.onchange = (e) => {
+      if (e.target.checked) {
+        state.logs.push({ ts: Date.now(), type: 'session', note: e.target.dataset.log, done: true });
+        const earned = store.evaluateBadges(state, state.assessments.at(-1)?.result);
+        persist();
+        toast(earned.length ? `Logged! Earned: ${earned.map(b=>b.label).join(', ')}` : 'Workout logged.');
+      }
+    };
+  });
+}
+
