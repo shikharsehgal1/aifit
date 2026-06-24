@@ -5,7 +5,7 @@
   "type": "module",
   "description": "PFAi — USAF Physical Fitness Assessment coach (MVP web app)",
   "scripts": {
-    "start": "python3 -m http.server 8080",
-    "serve": "npx --yes serve -l 8080 ."
+    "start": "node server.cjs",
+    "static": "python3 -m http.server 8080"
   }
 }
