@@ -30,8 +30,28 @@ npm start
 Without a key the app runs fully on-device — the Coach tab shows setup steps and
 intake falls back to the rule-based parser. **Privacy:** using the coach sends
 your entered numbers to the model; everything else stays local. The key is
-git-ignored (`.env`); never commit it, and a static (no-backend) deploy can't
-serve the coach.
+git-ignored (`.env`); never commit it.
+
+### Deploy (Vercel)
+
+The same client talks to `/api/*`, served two ways:
+
+- **Local:** `server.cjs` (via `npm start`) serves the static app **and** the proxy.
+- **Deployed:** the `api/` directory ships as **Vercel serverless (edge) functions**
+  (`api/coach.js` streams SSE, `api/parse.js`, `api/health.js`). Push to your
+  Vercel-connected repo and they deploy automatically.
+
+To enable the coach on the deployed site, set the key as a **Vercel environment
+variable** (Project → Settings → Environment Variables):
+
+```
+OPENROUTER_API_KEY = sk-or-...        # required
+COACH_MODEL        = anthropic/claude-sonnet-4.6   # optional
+```
+
+Then redeploy. Until that's set, the deployed Coach tab shows setup steps and the
+rest of the app works fully on-device. The key lives only in Vercel's env (never
+in the bundle or the repo).
 
 ## What's implemented
 
