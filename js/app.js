@@ -7,6 +7,7 @@ import { generateRegimen, daysUntil } from './regimen.js';
 import { parseNaturalLanguage } from './parser.js';
 import * as store from './storage.js';
 import { estimateProportions, detectorError } from './camera.js';
+import { coachStatus, coachChat, coachParse } from './coach.js';
 
 const TIME_EXERCISES = new Set(['run_1_5mi', 'run_2mi', 'plank']);
 // Exercise options for a component come from the active ruleset.
@@ -44,7 +45,7 @@ function normalizeDraftToRuleset() {
   }
 }
 normalizeDraftToRuleset();
-const VALID_VIEWS = ['assess', 'simulator', 'plan', 'progress', 'scan', 'leader', 'about'];
+const VALID_VIEWS = ['assess', 'simulator', 'coach', 'plan', 'progress', 'scan', 'leader', 'about'];
 function viewFromHash() {
   const v = location.hash.replace(/^#\/?/, '');
   return VALID_VIEWS.includes(v) ? v : 'assess';
@@ -128,8 +129,12 @@ function toast(msg) {
 }
 function persist() { store.saveState(state); }
 
+// Working input incl. body metrics (used by the WHtR component in 2026).
+function assessInput() {
+  return { ...draft, body: { waist: state.profile.waist, height: state.profile.height } };
+}
 function currentResult() {
-  return scoreAssessment(draft);
+  return scoreAssessment(assessInput());
 }
 function currentBody() {
   return bodyComposition({
@@ -141,15 +146,17 @@ function currentBody() {
 // ── Hero / landing ─────────────────────────────────────────────────────────
 function heroMarkup() {
   const w = STANDARD.weights;
+  const weightStr = Object.values(w).join('/');
+  const weightLbl = Object.keys(w).map(cap).join(' / ');
   return `
   <section class="hero">
     <div class="hero-eyebrow">USAF · ${STANDARD.reference.split(',')[0]}</div>
     <h2 class="hero-title">Know your score<br>before test day.</h2>
-    <p class="hero-sub">Enter your run, strength and core numbers — PFAi computes your weighted
+    <p class="hero-sub">Enter your numbers — PFAi computes your weighted
       composite, flags every component minimum, and shows the cheapest points to your next
       band. Instant, private, and fully on-device.</p>
     <div class="hero-stats">
-      <div class="hstat"><b>${w.aerobic}/${w.strength}/${w.core}</b><span>Aerobic / Strength / Core</span></div>
+      <div class="hstat"><b>${weightStr}</b><span>${weightLbl}</span></div>
       <div class="hstat"><b>≥${STANDARD.passComposite}</b><span>Composite to pass</span></div>
       <div class="hstat"><b>${BANDS.length}</b><span>Performance bands</span></div>
       <div class="hstat"><b>100%</b><span>On-device · no upload</span></div>
@@ -179,7 +186,7 @@ VIEWS.assess = function () {
         <div><label>Waist (in)</label><input id="f-waist" type="number" min="25" max="60" step="0.5" value="${state.profile.waist}"></div>
       </div>
 
-      ${['aerobic','strength','core'].map(compInputBlock).join('')}
+      ${componentsFor().filter((c) => !c.kind).map((c) => c.id).map(compInputBlock).join('')}
 
       <div class="chat">
         <input id="nl" placeholder="Or just type: '28M ran 1.5 in 12:40, 38 pushups, 2:10 plank, 185 lbs, 34 waist'">
@@ -214,16 +221,19 @@ function resultPanel() {
   const pct = r.composite;
   const passLine = r.complete
     ? (r.pass ? `<span class="badge tag-ok">PASS</span>` : `<span class="badge tag-fail">FAIL</span>`)
-    : `<span class="pill">${r.enteredCount}/3 components — partial</span>`;
+    : `<span class="pill">${r.enteredCount}/${r.requiredCount} components — partial</span>`;
 
-  const bars = ['aerobic','strength','core'].map((comp) => {
-    const c = r.components[comp];
-    if (!c) return `<div class="comp-bar"><div class="top"><span>${cap(comp)}</span><span class="pill">not entered</span></div></div>`;
+  const bars = componentsFor().map((comp) => {
+    const id = comp.id;
+    const c = r.components[id];
+    const title = comp.kind === 'body' ? comp.label : cap(id);
+    if (!c) return `<div class="comp-bar"><div class="top"><span>${title}</span><span class="pill">not entered</span></div></div>`;
     const fillPct = (c.points / c.maxPoints) * 100;
     const color = c.meetsMin ? (fillPct>=85?'var(--accent-2)':'var(--accent)') : 'var(--fail)';
     const estTag = c.table?.official === false ? ' <span class="pill" title="estimated — official chart pending">est</span>' : '';
+    const tag = comp.kind === 'body' ? `WHtR ${c.raw.toFixed(2)}` : exLabel(id, c.exercise);
     return `<div class="comp-bar">
-      <div class="top"><span>${cap(comp)} <span class="pill">${exLabel(comp, c.exercise)}</span>${estTag}</span>
+      <div class="top"><span>${title} <span class="pill">${tag}</span>${estTag}</span>
         <span>${c.points}/${c.maxPoints} pts ${c.meetsMin?'':'<span class="tag-fail">⚠ below min</span>'}</span></div>
       <div class="track"><div class="fill" style="width:${fillPct}%;background:${color}"></div></div>
     </div>`;
@@ -251,7 +261,7 @@ function resultPanel() {
   <div style="margin-top:14px">${bars}</div>
   <h3 style="margin-top:16px">Where to improve <span class="pill">cheapest points first</span></h3>
   <ul class="clean">${improve}</ul>
-  ${bodyPanel(body)}
+  ${getRulesetId() === 'pfa2026' ? '' : bodyPanel(body)}
   <div style="margin-top:14px"><button class="btn secondary" data-action="print">Print / save scorecard</button></div>
   <p class="cite">Scored under ${STANDARD.reference} ruleset v${STANDARD.rulesetVersion}.</p>`;
 }
@@ -262,18 +272,21 @@ function printScorecard() {
   if (r.enteredCount === 0) return toast('Enter at least one component first.');
   const body = currentBody();
   const br = bracketFor(draft.age);
-  const rows = ['aerobic', 'strength', 'core'].map((comp) => {
-    const c = r.components[comp];
-    if (!c) return `<tr><td>${cap(comp)}</td><td>—</td><td>—</td><td>not entered</td></tr>`;
-    const raw = TIME_EXERCISES.has(c.exercise) ? fmtTime(c.raw) : c.raw;
-    return `<tr><td>${cap(comp)} — ${exLabel(comp, c.exercise)}${c.table?.official === false ? ' (est.)' : ''}</td>
+  const rows = componentsFor().map((comp) => {
+    const id = comp.id;
+    const c = r.components[id];
+    const title = comp.kind === 'body' ? comp.label : cap(id);
+    if (!c) return `<tr><td>${title}</td><td>—</td><td>—</td><td>not entered</td></tr>`;
+    const raw = comp.kind === 'body' ? `WHtR ${c.raw.toFixed(2)}` : (TIME_EXERCISES.has(c.exercise) ? fmtTime(c.raw) : c.raw);
+    const label = comp.kind === 'body' ? comp.label : exLabel(id, c.exercise);
+    return `<tr><td>${title} — ${label}${c.table?.official === false ? ' (est.)' : ''}</td>
       <td>${raw}</td><td>${c.points}/${c.maxPoints}</td><td>${c.meetsMin ? 'meets min' : 'BELOW MIN'}</td></tr>`;
   }).join('');
-  const bodyRows = body.checked
+  const bodyRows = (getRulesetId() !== 'pfa2026' && body.checked)
     ? `<tr><td>Height / weight</td><td>${state.profile.weight} lb</td><td>max ${body.maxWeight}</td><td>${body.hwPass ? 'pass' : 'over'}</td></tr>`
     + (body.waistPass != null ? `<tr><td>Waist</td><td>${state.profile.waist}"</td><td>max ${body.waistMax}"</td><td>${body.waistPass ? 'pass' : 'over'}</td></tr>` : '')
     : '';
-  const status = r.complete ? (r.pass ? 'PASS' : 'FAIL') : `Partial (${r.enteredCount}/3)`;
+  const status = r.complete ? (r.pass ? 'PASS' : 'FAIL') : `Partial (${r.enteredCount}/${r.requiredCount})`;
   const today = new Date().toISOString().slice(0, 10);
   const html = `<!doctype html><meta charset="utf-8"><title>PFAi scorecard</title>
   <style>
@@ -341,11 +354,20 @@ WIRES.assess = function () {
   app.querySelectorAll('[data-raw]').forEach((inp) => {
     inp.oninput = (e) => { setRaw(e.target.dataset.raw, e.target.value.trim()); refreshResult(); };
   });
-  $('#nl-go').onclick = () => {
-    const parsed = parseNaturalLanguage($('#nl').value);
+  $('#nl-go').onclick = async () => {
+    const text = $('#nl').value;
+    if (!text.trim()) return;
+    let parsed, via = 'rules';
+    const st = await coachStatus();
+    if (st.available) {
+      try { parsed = normalizeParsed(await coachParse(text)); via = 'AI'; }
+      catch { parsed = parseNaturalLanguage(text); }
+    } else {
+      parsed = parseNaturalLanguage(text);
+    }
     applyParsed(parsed);
     render();
-    toast('Parsed what I could from your message.');
+    toast(`Parsed via ${via}.`);
   };
   $('#save').onclick = () => {
     const r = currentResult();
@@ -382,7 +404,7 @@ VIEWS.simulator = function () {
   const r = currentResult();
   if (r.enteredCount === 0)
     return `<div class="card"><h2>What-If Simulator</h2><p class="hint">Enter your current numbers on the Assess tab first, then come back to experiment.</p><div style="margin-top:12px"><a class="btn secondary" href="#assess">Go to Assess →</a></div></div>`;
-  const sliders = ['aerobic','strength','core'].map((comp) => {
+  const sliders = componentsFor().filter((x) => !x.kind).map((x) => x.id).map((comp) => {
     const c = r.components[comp];
     if (!c) return '';
     const t = tableFor(draft.sex, draft.age, comp, c.exercise);
@@ -409,7 +431,7 @@ VIEWS.simulator = function () {
 WIRES.simulator = function () {
   const overrides = {};
   const update = () => {
-    const res = whatIf(draft, overrides);
+    const res = whatIf(assessInput(), overrides);
     $('#sim-score').textContent = res.composite;
     const dial = $('#sim-dial');
     dial.style.setProperty('--pct', res.composite);
@@ -427,6 +449,75 @@ WIRES.simulator = function () {
     sl.oninput = (e) => { overrides[e.target.dataset.sim] = +e.target.value; update(); };
   });
   update();
+};
+
+// ── View: COACH (AI) ────────────────────────────────────────────────────
+let coachMessages = []; // { role:'user'|'assistant', content }
+let coachBusy = false;
+
+// Compact, deterministic summary of the member's numbers for grounding.
+function coachContext() {
+  const r = currentResult();
+  if (r.enteredCount === 0) return '';
+  const lines = [`Sex ${draft.sex}, age ${draft.age} (${bracketFor(draft.age).label}). Ruleset: ${getRuleset().label}.`,
+    `Composite ${r.composite}/100 — ${r.band.label}${r.complete ? (r.pass ? ' (PASS)' : ' (FAIL)') : ' (partial)'}.`];
+  for (const comp of componentsFor().map((c) => c.id)) {
+    const c = r.components[comp];
+    if (!c) continue;
+    const raw = c.unit === 'seconds' ? fmtTime(c.raw) : (c.unit === 'ratio' ? c.raw.toFixed(2) : c.raw);
+    lines.push(`- ${cap(comp)} (${exLabel(comp, c.exercise)}): ${raw} → ${c.points}/${c.maxPoints} pts${c.meetsMin ? '' : ' [BELOW MINIMUM]'}.`);
+  }
+  const gaps = gapAnalysis(r).filter((g) => g.headroom > 0);
+  if (gaps.length) lines.push(`Cheapest points available: ${gaps.map((g) => `${cap(g.component)} +${g.headroom}`).join(', ')}.`);
+  return lines.join('\n');
+}
+
+VIEWS.coach = function () {
+  const msgs = coachMessages.map((m) =>
+    `<div class="msg ${m.role}"><div class="bubble">${escapeHtml(m.content).replace(/\n/g, '<br>')}</div></div>`).join('')
+    || `<div class="hint" style="padding:8px 0">Ask anything about your training — e.g. <em>"what's the fastest way to add 5 points?"</em> or <em>"build me a 6-week run plan."</em> Your current numbers are shared with the model for grounded advice.</div>`;
+  return `<div class="card" id="coach-card">
+    <h2>AI Coach <span class="beta">ai</span></h2>
+    <div id="coach-setup"></div>
+    <div class="chatlog" id="coach-log">${msgs}${coachBusy ? '<div class="msg assistant"><div class="bubble hint">thinking…</div></div>' : ''}</div>
+    <div class="chat" style="margin-top:14px">
+      <input id="coach-in" placeholder="Ask your coach…" autocomplete="off" ${coachBusy ? 'disabled' : ''}>
+      <button class="btn" id="coach-send" ${coachBusy ? 'disabled' : ''}>Send</button>
+    </div>
+    <p class="cite">Advice is AI-generated and unofficial; your scores are computed by the app, not the model. Using the coach sends your entered numbers to the model via your local server.</p>
+  </div>`;
+};
+
+WIRES.coach = function () {
+  const setup = $('#coach-setup');
+  coachStatus().then((st) => {
+    if (!st.available && setup) {
+      setup.innerHTML = `<div class="warn-box" style="margin-bottom:12px">The AI coach needs the local server with a key.
+        Copy <code>.env.example</code> → <code>.env</code>, add your <code>OPENROUTER_API_KEY</code>, then run <code>npm start</code> (<code>node server.cjs</code>).
+        Without it, the rest of the app still works fully on-device.</div>`;
+      const inp = $('#coach-in'); const btn = $('#coach-send');
+      if (inp) inp.disabled = true; if (btn) btn.disabled = true;
+    }
+  });
+  const send = async () => {
+    const inp = $('#coach-in');
+    const text = inp?.value.trim();
+    if (!text || coachBusy) return;
+    coachMessages.push({ role: 'user', content: text });
+    coachBusy = true; render();
+    try {
+      const reply = await coachChat(coachMessages, coachContext());
+      coachMessages.push({ role: 'assistant', content: reply });
+    } catch (e) {
+      coachMessages.push({ role: 'assistant', content: `⚠ ${e.message || 'Coach unavailable.'}` });
+    }
+    coachBusy = false; render();
+    const log = $('#coach-log'); if (log) log.scrollTop = log.scrollHeight;
+    $('#coach-in')?.focus();
+  };
+  $('#coach-send') && ($('#coach-send').onclick = send);
+  $('#coach-in') && ($('#coach-in').onkeydown = (e) => { if (e.key === 'Enter') send(); });
+  const log = $('#coach-log'); if (log) log.scrollTop = log.scrollHeight;
 };
 
 // ── View: PLAN ──────────────────────────────────────────────────────────
@@ -683,6 +774,20 @@ WIRES.about = function () {
 // ── boot ─────────────────────────────────────────────────────────────────
 function cap(s){ return s.charAt(0).toUpperCase()+s.slice(1); }
 function clamp(n,lo,hi){ return Math.max(lo,Math.min(hi,n)); }
+function escapeHtml(s){ return String(s).replace(/[&<>"']/g, (c) => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c])); }
+// Coerce LLM-parsed fields into the shapes setRaw/applyParsed expect (times → seconds).
+function normalizeParsed(p) {
+  p = p || {};
+  const out = { sex: p.sex, age: p.age, height: p.height, weight: p.weight, waist: p.waist, components: {} };
+  for (const comp of ['aerobic','strength','core']) {
+    const c = p.components?.[comp];
+    if (!c || c.raw == null || c.raw === '') continue;
+    const ex = c.exercise;
+    if (!ex) continue;
+    out.components[comp] = { exercise: ex, raw: TIME_EXERCISES.has(ex) ? parseTime(c.raw) : Number(c.raw) };
+  }
+  return out;
+}
 function VIEWS(){} function WIRES(){} // namespaces (hoisted below as objects)
 syncTabs();
 render();
