@@ -13,6 +13,7 @@ const SHELL = [
   './js/parser.js',
   './js/storage.js',
   './js/camera.js',
+  './js/coach.js',
   './js/data/standards.js',
 ];
 
