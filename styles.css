@@ -277,6 +277,18 @@ ul.clean li b { font-weight: 600; }
 .chat { display: flex; gap: 10px; margin-top: 16px; }
 .chat input { flex: 1; }
 
+/* ── Coach chat ───────────────────────────────────────────────────────── */
+.chatlog { max-height: 52vh; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; padding: 4px 0; }
+.msg { display: flex; }
+.msg.user { justify-content: flex-end; }
+.msg .bubble {
+  max-width: 80%; padding: 10px 13px; border-radius: 12px; font-size: 13.5px; line-height: 1.55;
+  border: 1px solid var(--line); background: var(--bg-2);
+}
+.msg.user .bubble { background: var(--panel-2); border-color: var(--line-2); }
+.msg.assistant .bubble { background: var(--panel); }
+code { font-family: var(--mono); font-size: .9em; background: var(--panel-2); padding: 1px 5px; border-radius: 4px; }
+
 /* ── Plan weeks ───────────────────────────────────────────────────────── */
 .week {
   border: 1px solid var(--line); border-radius: var(--radius-s);
