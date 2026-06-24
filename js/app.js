@@ -452,8 +452,10 @@ WIRES.simulator = function () {
 };
 
 // ── View: COACH (AI) ────────────────────────────────────────────────────
-let coachMessages = []; // { role:'user'|'assistant', content }
+let coachMessages = Array.isArray(state.coach) ? state.coach : []; // persisted history
 let coachBusy = false;
+let coachAbort = null; // AbortController while streaming
+function saveCoach() { state.coach = coachMessages.slice(-40); persist(); }
 
 // Compact, deterministic summary of the member's numbers for grounding.
 function coachContext() {
@@ -480,14 +482,19 @@ VIEWS.coach = function () {
   }).join('')
     || `<div class="hint" style="padding:8px 0">Ask anything about your training — e.g. <em>"what's the fastest way to add 5 points?"</em> or <em>"build me a 6-week run plan."</em> Your current numbers are shared with the model for grounded advice.</div>`;
   return `<div class="card" id="coach-card">
-    <h2>AI Coach <span class="beta">ai</span></h2>
-    <div id="coach-setup"></div>
+    <div style="display:flex;justify-content:space-between;align-items:center">
+      <h2 style="margin:0">AI Coach <span class="beta">ai</span></h2>
+      ${coachMessages.length ? '<button class="btn secondary" id="coach-clear" style="padding:6px 12px">Clear chat</button>' : ''}
+    </div>
+    <div id="coach-setup" style="margin-top:14px"></div>
     <div class="chatlog" id="coach-log">${msgs}</div>
     <div class="chat" style="margin-top:14px">
       <input id="coach-in" placeholder="Ask your coach…" autocomplete="off" ${coachBusy ? 'disabled' : ''}>
-      <button class="btn" id="coach-send" ${coachBusy ? 'disabled' : ''}>Send</button>
+      ${coachBusy
+        ? '<button class="btn secondary" id="coach-stop">Stop</button>'
+        : '<button class="btn" id="coach-send">Send</button>'}
     </div>
-    <p class="cite">Advice is AI-generated and unofficial; your scores are computed by the app, not the model. Using the coach sends your entered numbers to the model via your local server.</p>
+    <p class="cite">Advice is AI-generated and unofficial; your scores are computed by the app, not the model. Chats are saved on this device; using the coach sends your entered numbers to the model via the server proxy.</p>
   </div>`;
 };
 
@@ -495,9 +502,10 @@ WIRES.coach = function () {
   const setup = $('#coach-setup');
   coachStatus().then((st) => {
     if (!st.available && setup) {
-      setup.innerHTML = `<div class="warn-box" style="margin-bottom:12px">The AI coach needs the local server with a key.
-        Copy <code>.env.example</code> → <code>.env</code>, add your <code>OPENROUTER_API_KEY</code>, then run <code>npm start</code> (<code>node server.cjs</code>).
-        Without it, the rest of the app still works fully on-device.</div>`;
+      setup.innerHTML = `<div class="warn-box" style="margin-bottom:12px"><b>Coach needs an OpenRouter key on the server.</b>
+        <br>• <b>Deployed (Vercel):</b> add <code>OPENROUTER_API_KEY</code> in Project → Settings → Environment Variables, then redeploy.
+        <br>• <b>Local:</b> copy <code>.env.example</code> → <code>.env</code>, add the key, run <code>npm start</code>.
+        <br>Everything else works without it.</div>`;
       const inp = $('#coach-in'); const btn = $('#coach-send');
       if (inp) inp.disabled = true; if (btn) btn.disabled = true;
     }
@@ -510,7 +518,8 @@ WIRES.coach = function () {
     coachMessages.push({ role: 'user', content: text });
     const asst = { role: 'assistant', content: '' };
     coachMessages.push(asst);
-    coachBusy = true; render(); // renders user msg + empty streaming bubble (#coach-stream)
+    coachBusy = true; coachAbort = new AbortController();
+    render(); // renders user msg + empty streaming bubble (#coach-stream) + Stop button
     const log = $('#coach-log');
     try {
       await coachChatStream(history, coachContext(), (full) => {
@@ -518,15 +527,18 @@ WIRES.coach = function () {
         const b = document.getElementById('coach-stream');
         if (b) b.innerHTML = escapeHtml(full).replace(/\n/g, '<br>');
         if (log) log.scrollTop = log.scrollHeight;
-      });
+      }, coachAbort.signal);
     } catch (e) {
-      asst.content = `⚠ ${e.message || 'Coach unavailable.'}`;
+      if (e.name === 'AbortError') { if (asst.content) asst.content += ' …(stopped)'; else asst.content = '(stopped)'; }
+      else asst.content = `⚠ ${e.message || 'Coach unavailable.'}`;
     }
-    coachBusy = false; render();
+    coachBusy = false; coachAbort = null; saveCoach(); render();
     const log2 = $('#coach-log'); if (log2) log2.scrollTop = log2.scrollHeight;
     $('#coach-in')?.focus();
   };
   $('#coach-send') && ($('#coach-send').onclick = send);
+  $('#coach-stop') && ($('#coach-stop').onclick = () => coachAbort?.abort());
+  $('#coach-clear') && ($('#coach-clear').onclick = () => { coachMessages = []; saveCoach(); render(); });
   $('#coach-in') && ($('#coach-in').onkeydown = (e) => { if (e.key === 'Enter') send(); });
   const log = $('#coach-log'); if (log) log.scrollTop = log.scrollHeight;
 };
@@ -717,32 +729,64 @@ WIRES.scan = function () {
 VIEWS.leader = function () {
   const members = state.unit.members;
   const ready = members.filter(m=>m.composite>=75).length;
-  const rows = members.map((m,i)=>`<div class="member">
-    <span>${m.name}</span>
-    <span><span class="badge" style="background:${m.composite>=75?'var(--accent-2)':'var(--fail)'};color:#02132b">${m.composite}</span>
-    <button class="btn secondary" data-del="${i}" style="padding:4px 8px">✕</button></span>
-  </div>`).join('') || '<p class="hint">No members yet. This is a local demo of a unit-readiness roll-up for flight/squadron leaders.</p>';
+  const pct = members.length ? Math.round(ready/members.length*100) : 0;
+  const avg = members.length ? round1(members.reduce((s,m)=>s+(+m.composite||0),0)/members.length) : 0;
+  const sorted = members.map((m,i)=>({...m,i})).sort((a,b)=>b.composite-a.composite);
+  const rows = sorted.map((m)=>`<div class="member">
+    <span>${escapeHtml(m.name)}</span>
+    <span><input class="m-edit" data-edit="${m.i}" type="number" min="0" max="100" value="${m.composite}" style="width:64px;text-align:right;padding:4px 6px">
+    <span class="badge" style="background:${m.composite>=75?'var(--accent-2)':'var(--fail)'};color:#02132b">${m.composite>=75?'ready':'not'}</span>
+    <button class="btn secondary" data-del="${m.i}" style="padding:4px 8px">✕</button></span>
+  </div>`).join('') || '<p class="hint">No members yet — add your flight/squadron below. Data stays on this device; export to share.</p>';
   return `<div class="card">
-    <h2>Leader View <span class="pill">unit readiness (local demo)</span></h2>
-    <p class="hint">Aggregate readiness for the people you manage. In production this would sync from members' accounts with appropriate authorization — here it's a manual local demo.</p>
+    <h2>Leader View <span class="pill">unit readiness</span></h2>
+    <p class="hint">Track readiness for the people you manage. Stored locally on this device — use Export/Import to move or back up a roster.</p>
     <div class="score-hero" style="margin:10px 0">
-      <div class="dial" style="--pct:${members.length?Math.round(ready/members.length*100):0};--dial-color:var(--accent-2)">
+      <div class="dial" style="--pct:${pct};--dial-color:var(--accent-2)">
         <div class="num"><b>${ready}/${members.length||0}</b><span>ready</span></div>
       </div>
-      <div class="hint">${members.length?`${Math.round(ready/members.length*100)}% of your unit is currently passing (composite ≥ 75).`:''}</div>
+      <div class="hint">${members.length?`${pct}% currently passing (composite ≥ 75). Unit average ${avg}.`:'Add members to see unit readiness.'}</div>
     </div>
     <div class="row"><input id="m-name" placeholder="Member name"><input id="m-score" type="number" min="0" max="100" placeholder="Composite"></div>
-    <div style="margin-top:8px"><button class="btn" id="m-add">Add member</button></div>
+    <div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap">
+      <button class="btn" id="m-add">Add member</button>
+      <button class="btn secondary" id="m-export">Export roster</button>
+      <button class="btn secondary" id="m-import">Import</button>
+    </div>
     <div style="margin-top:14px">${rows}</div>
   </div>`;
 };
 WIRES.leader = function () {
-  $('#m-add').onclick = () => {
+  const addMember = () => {
     const name = $('#m-name').value.trim(); const score = clamp(+$('#m-score').value||0,0,100);
     if (!name) return toast('Enter a name.');
     state.unit.members.push({ name, composite: score }); persist(); render();
   };
+  $('#m-add').onclick = addMember;
+  $('#m-score').onkeydown = (e) => { if (e.key === 'Enter') addMember(); };
+  $('#m-export').onclick = () => {
+    const blob = new Blob([JSON.stringify(state.unit.members, null, 2)], { type: 'application/json' });
+    const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'pfai-roster.json'; a.click();
+  };
+  $('#m-import').onclick = () => {
+    const inp = document.createElement('input'); inp.type = 'file'; inp.accept = 'application/json';
+    inp.onchange = () => {
+      const f = inp.files[0]; if (!f) return;
+      const rd = new FileReader();
+      rd.onload = () => {
+        try {
+          const list = JSON.parse(rd.result);
+          if (!Array.isArray(list)) throw new Error('bad');
+          state.unit.members = list.filter(m => m && m.name).map(m => ({ name: String(m.name), composite: clamp(+m.composite||0,0,100) }));
+          persist(); render(); toast(`Imported ${state.unit.members.length} members.`);
+        } catch { toast('Could not read that roster file.'); }
+      };
+      rd.readAsText(f);
+    };
+    inp.click();
+  };
   app.querySelectorAll('[data-del]').forEach((b)=>{ b.onclick=()=>{ state.unit.members.splice(+b.dataset.del,1); persist(); render(); }; });
+  app.querySelectorAll('[data-edit]').forEach((inp)=>{ inp.onchange=()=>{ const m=state.unit.members[+inp.dataset.edit]; if(m){ m.composite=clamp(+inp.value||0,0,100); persist(); render(); } }; });
 };
 
 // ── View: ABOUT / STANDARDS ─────────────────────────────────────────────────
