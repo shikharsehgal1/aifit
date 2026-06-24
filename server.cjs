@@ -18,7 +18,7 @@ const ROOT = __dirname;
 const PORT = process.env.PORT || 8080;
 const KEY = process.env.OPENROUTER_API_KEY || '';
 const MODEL = process.env.COACH_MODEL || 'anthropic/claude-sonnet-4.6';
-const OR_URL = 'https://openrouter.ai/api/v1/chat/completions';
+const OR_URL = process.env.OPENROUTER_URL || 'https://openrouter.ai/api/v1/chat/completions';
 
 const MIME = {
   '.html': 'text/html', '.css': 'text/css', '.js': 'text/javascript',
@@ -66,6 +66,45 @@ async function callOR(messages, { jsonMode = false, max_tokens = 700, temperatur
   return data.choices?.[0]?.message?.content ?? '';
 }
 
+// Stream a coach reply to the client as Server-Sent Events: one
+// `data: {"delta":"…"}` per token, then `data: {"done":true}`.
+async function streamCoach(messages, res) {
+  if (!KEY) return json(res, 503, { error: 'OPENROUTER_API_KEY not set on the server.' });
+  let upstream;
+  try {
+    upstream = await fetch(OR_URL, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${KEY}`, 'Content-Type': 'application/json', 'HTTP-Referer': 'http://localhost', 'X-Title': 'PFAi Coach' },
+      body: JSON.stringify({ model: MODEL, messages, max_tokens: 700, temperature: 0.5, stream: true }),
+    });
+  } catch { return json(res, 502, { error: 'Could not reach the model.' }); }
+  if (!upstream.ok || !upstream.body) {
+    const t = await upstream.text?.().catch(() => '') || '';
+    return json(res, 502, { error: `OpenRouter ${upstream.status}: ${t.slice(0, 200)}` });
+  }
+  res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive' });
+  const dec = new TextDecoder();
+  let buf = '';
+  try {
+    for await (const chunk of upstream.body) {
+      buf += dec.decode(chunk, { stream: true });
+      let nl;
+      while ((nl = buf.indexOf('\n')) >= 0) {
+        const line = buf.slice(0, nl).trim();
+        buf = buf.slice(nl + 1);
+        if (!line.startsWith('data:')) continue; // skip SSE comments / keep-alives
+        const data = line.slice(5).trim();
+        if (data === '[DONE]') { res.write('data: {"done":true}\n\n'); return res.end(); }
+        try { const d = JSON.parse(data).choices?.[0]?.delta?.content; if (d) res.write(`data: ${JSON.stringify({ delta: d })}\n\n`); } catch { /* partial */ }
+      }
+    }
+    res.write('data: {"done":true}\n\n');
+    res.end();
+  } catch {
+    try { res.write('data: {"error":"stream interrupted"}\n\n'); res.end(); } catch {}
+  }
+}
+
 function serveStatic(urlPath, res) {
   let p = decodeURIComponent(urlPath.split('?')[0]);
   if (p === '/') p = '/index.html';
@@ -91,6 +130,7 @@ const server = http.createServer(async (req, res) => {
       try {
         if (url === '/api/coach') {
           const msgs = [{ role: 'system', content: COACH_SYSTEM(body.context) }, ...(Array.isArray(body.messages) ? body.messages.slice(-12) : [])];
+          if (body.stream) return streamCoach(msgs, res);
           return json(res, 200, { reply: await callOR(msgs, { max_tokens: 700, temperature: 0.5 }) });
         }
         const out = await callOR([{ role: 'system', content: PARSE_SYSTEM }, { role: 'user', content: String(body.text || '') }], { jsonMode: true, max_tokens: 400, temperature: 0 });
