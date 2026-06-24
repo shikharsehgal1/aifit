@@ -26,6 +26,42 @@ export async function coachChat(messages, context) {
   return j.reply;
 }
 
+// Streaming coach reply. Calls onDelta(fullTextSoFar) as tokens arrive and
+// resolves with the complete text. Falls back to a JSON reply if the server
+// didn't stream (e.g. an error response).
+export async function coachChatStream(messages, context, onDelta) {
+  const r = await fetch('/api/coach', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ messages, context, stream: true }),
+  });
+  const ct = r.headers.get('content-type') || '';
+  if (!ct.includes('text/event-stream')) {
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
+    const reply = j.reply || '';
+    onDelta && onDelta(reply);
+    return reply;
+  }
+  const reader = r.body.getReader();
+  const dec = new TextDecoder();
+  let buf = '', full = '';
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buf += dec.decode(value, { stream: true });
+    let idx;
+    while ((idx = buf.indexOf('\n\n')) >= 0) {
+      const evt = buf.slice(0, idx); buf = buf.slice(idx + 2);
+      const line = evt.split('\n').find((l) => l.startsWith('data:'));
+      if (!line) continue;
+      let o; try { o = JSON.parse(line.slice(5).trim()); } catch { continue; }
+      if (o.error) throw new Error(o.error);
+      if (o.delta) { full += o.delta; onDelta && onDelta(full); }
+    }
+  }
+  return full;
+}
+
 // LLM natural-language intake. Returns a parsed object or throws (callers fall
 // back to the rule-based parser).
 export async function coachParse(text) {
