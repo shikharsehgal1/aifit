@@ -6,6 +6,8 @@ import {
   STANDARD,
   bandFor,
   tableFor,
+  componentsFor,
+  WHTR,
   MAX_WEIGHT_BY_HEIGHT,
   WAIST_MAX,
 } from './data/standards.js';
@@ -57,22 +59,40 @@ export function scoreComponent(sex, age, component, exercise, raw) {
   };
 }
 
-// Full assessment. `input` = { sex, age, components: { aerobic:{exercise,raw}, ... } }
+// Score the waist-to-height-ratio body component (PFRA-2026).
+export function scoreBody(body, maxPoints = WHTR.maxPoints) {
+  if (!body || !body.waist || !body.height) return null;
+  const ratio = body.waist / body.height;
+  const points = Math.max(0, Math.min(maxPoints, interpolatePoints(WHTR, ratio)));
+  return {
+    component: 'body', exercise: 'whtr', raw: ratio, unit: 'ratio',
+    points: round1(points), maxPoints, min: WHTR.min, betterDirection: 'lower',
+    meetsMin: ratio < WHTR.min, // scores above zero
+    table: { official: true, anchors: WHTR.anchors, betterDirection: 'lower' },
+  };
+}
+
+// Full assessment, driven by the active ruleset's components.
+// `input` = { sex, age, components:{ aerobic:{exercise,raw},… }, body:{waist,height} }
 export function scoreAssessment(input) {
-  const { sex, age, components = {} } = input;
+  const { sex, age, components = {}, body } = input;
+  const comps = componentsFor();
   const scored = {};
   let total = 0;
   let anyComponentFail = false;
   let enteredCount = 0;
 
-  for (const comp of ['aerobic', 'strength', 'core']) {
-    const sel = components[comp];
-    if (!sel || sel.raw == null || sel.raw === '') {
-      scored[comp] = null;
-      continue;
+  for (const comp of comps) {
+    let r = null;
+    if (comp.kind === 'body') {
+      r = scoreBody(body, comp.weight);
+    } else {
+      const sel = components[comp.id];
+      if (sel && sel.raw != null && sel.raw !== '') {
+        r = scoreComponent(sex, age, comp.id, sel.exercise, sel.raw);
+      }
     }
-    const r = scoreComponent(sex, age, comp, sel.exercise, sel.raw);
-    scored[comp] = r;
+    scored[comp.id] = r;
     if (r) {
       total += r.points;
       enteredCount++;
@@ -81,9 +101,10 @@ export function scoreAssessment(input) {
   }
 
   const composite = round1(total);
-  // Composite pass requires >=75 AND every entered component meets its minimum.
+  const requiredCount = comps.length;
+  const complete = enteredCount === requiredCount;
   const meetsComposite = composite >= STANDARD.passComposite;
-  const pass = enteredCount === 3 ? meetsComposite && !anyComponentFail : null; // null = incomplete
+  const pass = complete ? meetsComposite && !anyComponentFail : null; // null = incomplete
   const band = bandFor(composite);
 
   return {
@@ -92,9 +113,10 @@ export function scoreAssessment(input) {
     rulesetVersion: STANDARD.rulesetVersion,
     components: scored,
     composite,
-    maxComposite: 100,
+    maxComposite: comps.reduce((s, c) => s + (c.weight ?? 0), 0) || 100,
     enteredCount,
-    complete: enteredCount === 3,
+    requiredCount,
+    complete,
     meetsComposite,
     anyComponentFail,
     pass,
@@ -107,16 +129,16 @@ export function scoreAssessment(input) {
 // "cheapest points" ranking using the component weighting.
 export function gapAnalysis(result) {
   const gaps = [];
-  for (const comp of ['aerobic', 'strength', 'core']) {
+  for (const comp of Object.keys(result.components)) {
     const r = result.components[comp];
     if (!r) continue;
     const headroom = r.maxPoints - r.points;
     let toMin = null;
-    if (!r.meetsMin) {
+    if (!r.meetsMin && r.unit !== 'ratio') {
       toMin = formatDelta(r, r.min);
     }
-    // raw needed for +1, +3, +5 more points (whichever is reachable)
-    const nextRaw = rawForPoints(r, Math.min(r.maxPoints, r.points + 3));
+    // raw needed for +3 more points (whichever is reachable); skip body (ratio).
+    const nextRaw = r.unit === 'ratio' ? null : rawForPoints(r, Math.min(r.maxPoints, r.points + 3));
     gaps.push({
       component: comp,
       points: r.points,
