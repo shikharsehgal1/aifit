@@ -29,10 +29,10 @@ export async function coachChat(messages, context) {
 // Streaming coach reply. Calls onDelta(fullTextSoFar) as tokens arrive and
 // resolves with the complete text. Falls back to a JSON reply if the server
 // didn't stream (e.g. an error response).
-export async function coachChatStream(messages, context, onDelta) {
+export async function coachChatStream(messages, context, onDelta, signal) {
   const r = await fetch('/api/coach', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ messages, context, stream: true }),
+    body: JSON.stringify({ messages, context, stream: true }), signal,
   });
   const ct = r.headers.get('content-type') || '';
   if (!ct.includes('text/event-stream')) {

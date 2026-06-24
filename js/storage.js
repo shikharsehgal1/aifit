@@ -10,7 +10,8 @@ const DEFAULT = {
   assessments: [], // { ts, input, result }
   logs: [], // workout log entries { ts, type, note, done }
   achievements: [], // earned badge keys
-  unit: { id: null, members: [] }, // leader view (local demo)
+  coach: [], // saved AI-coach conversation { role, content }
+  unit: { id: null, members: [] }, // leader view roster (on-device)
 };
 
 export function loadState() {
