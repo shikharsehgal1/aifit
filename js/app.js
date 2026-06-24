@@ -7,7 +7,7 @@ import { generateRegimen, daysUntil } from './regimen.js';
 import { parseNaturalLanguage } from './parser.js';
 import * as store from './storage.js';
 import { estimateProportions, detectorError } from './camera.js';
-import { coachStatus, coachChat, coachParse } from './coach.js';
+import { coachStatus, coachChatStream, coachParse } from './coach.js';
 
 const TIME_EXERCISES = new Set(['run_1_5mi', 'run_2mi', 'plank']);
 // Exercise options for a component come from the active ruleset.
@@ -473,13 +473,16 @@ function coachContext() {
 }
 
 VIEWS.coach = function () {
-  const msgs = coachMessages.map((m) =>
-    `<div class="msg ${m.role}"><div class="bubble">${escapeHtml(m.content).replace(/\n/g, '<br>')}</div></div>`).join('')
+  const msgs = coachMessages.map((m, i) => {
+    const streaming = coachBusy && i === coachMessages.length - 1 && m.role === 'assistant';
+    const content = escapeHtml(m.content).replace(/\n/g, '<br>') || (streaming ? '<span class="dots">…</span>' : '');
+    return `<div class="msg ${m.role}"><div class="bubble"${streaming ? ' id="coach-stream"' : ''}>${content}</div></div>`;
+  }).join('')
     || `<div class="hint" style="padding:8px 0">Ask anything about your training — e.g. <em>"what's the fastest way to add 5 points?"</em> or <em>"build me a 6-week run plan."</em> Your current numbers are shared with the model for grounded advice.</div>`;
   return `<div class="card" id="coach-card">
     <h2>AI Coach <span class="beta">ai</span></h2>
     <div id="coach-setup"></div>
-    <div class="chatlog" id="coach-log">${msgs}${coachBusy ? '<div class="msg assistant"><div class="bubble hint">thinking…</div></div>' : ''}</div>
+    <div class="chatlog" id="coach-log">${msgs}</div>
     <div class="chat" style="margin-top:14px">
       <input id="coach-in" placeholder="Ask your coach…" autocomplete="off" ${coachBusy ? 'disabled' : ''}>
       <button class="btn" id="coach-send" ${coachBusy ? 'disabled' : ''}>Send</button>
@@ -503,16 +506,24 @@ WIRES.coach = function () {
     const inp = $('#coach-in');
     const text = inp?.value.trim();
     if (!text || coachBusy) return;
+    const history = coachMessages.concat({ role: 'user', content: text }); // sent to the model
     coachMessages.push({ role: 'user', content: text });
-    coachBusy = true; render();
+    const asst = { role: 'assistant', content: '' };
+    coachMessages.push(asst);
+    coachBusy = true; render(); // renders user msg + empty streaming bubble (#coach-stream)
+    const log = $('#coach-log');
     try {
-      const reply = await coachChat(coachMessages, coachContext());
-      coachMessages.push({ role: 'assistant', content: reply });
+      await coachChatStream(history, coachContext(), (full) => {
+        asst.content = full;
+        const b = document.getElementById('coach-stream');
+        if (b) b.innerHTML = escapeHtml(full).replace(/\n/g, '<br>');
+        if (log) log.scrollTop = log.scrollHeight;
+      });
     } catch (e) {
-      coachMessages.push({ role: 'assistant', content: `⚠ ${e.message || 'Coach unavailable.'}` });
+      asst.content = `⚠ ${e.message || 'Coach unavailable.'}`;
     }
     coachBusy = false; render();
-    const log = $('#coach-log'); if (log) log.scrollTop = log.scrollHeight;
+    const log2 = $('#coach-log'); if (log2) log2.scrollTop = log2.scrollHeight;
     $('#coach-in')?.focus();
   };
   $('#coach-send') && ($('#coach-send').onclick = send);
