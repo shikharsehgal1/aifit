@@ -92,6 +92,7 @@ window.addEventListener('hashchange', () => {
   syncTabs();
   app.scrollIntoView({ block: 'start', behavior: 'smooth' });
   render();
+  app.focus({ preventScroll: true }); // land keyboard/SR users in the new view
 });
 function syncTabs() {
   document.querySelectorAll('#tabs button[data-view]').forEach((b) => {
@@ -134,7 +135,7 @@ function toast(msg) {
   t.textContent = msg; t.classList.add('show');
   setTimeout(() => t.classList.remove('show'), 2200);
 }
-function persist() { store.saveState(state); }
+function persist() { if (store.saveState(state) === false) toast('⚠ Storage full — data not saved. Export a backup.'); }
 
 // Working input incl. body metrics (used by the WHtR component in 2026).
 function assessInput() {
@@ -722,10 +723,12 @@ VIEWS.progress = function () {
       <h3 style="margin-top:18px">Workout log</h3>
       <div class="kv"><span>Sessions completed</span><b>${state.logs.filter(l=>l.done).length}</b></div>
       <div class="kv"><span>Assessments saved</span><b>${state.assessments.length}</b></div>
-      <div style="margin-top:12px;display:flex;gap:8px">
-        <button class="btn secondary" id="export">Export data</button>
+      <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn secondary" id="export">Export backup</button>
+        <button class="btn secondary" id="import">Import backup</button>
         <button class="btn secondary" id="reset">Reset all</button>
       </div>
+      <p class="cite">All data lives only in this browser. Export a backup to move devices or before clearing site data.</p>
     </div>
   </div>`;
 };
@@ -733,11 +736,29 @@ WIRES.progress = function () {
   $('#export').onclick = () => {
     const blob = new Blob([store.exportJSON(state)], { type:'application/json' });
     const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob); a.download = 'pfai-data.json'; a.click();
+    a.href = URL.createObjectURL(blob); a.download = 'pfai-backup.json'; a.click();
+  };
+  $('#import').onclick = () => {
+    const inp = document.createElement('input'); inp.type = 'file'; inp.accept = 'application/json';
+    inp.onchange = () => {
+      const f = inp.files[0]; if (!f) return;
+      const rd = new FileReader();
+      rd.onload = () => {
+        try {
+          state = store.importJSON(rd.result);
+          setRuleset(state.settings.ruleset || 'pfa2026');
+          setAltitude(state.settings.altitudeFt || 0);
+          coachMessages = Array.isArray(state.coach) ? state.coach : [];
+          toast('Backup restored.'); render();
+        } catch (e) { toast(e.message || 'Could not read that backup.'); }
+      };
+      rd.readAsText(f);
+    };
+    inp.click();
   };
   $('#reset').onclick = () => {
     if (confirm('Erase all saved assessments, logs and settings on this device?')) {
-      localStorage.clear(); state = store.loadState(); toast('All data cleared.'); render();
+      localStorage.clear(); state = store.loadState(); coachMessages = []; toast('All data cleared.'); render();
     }
   };
 };
@@ -934,5 +955,13 @@ function normalizeParsed(p) {
   return out;
 }
 function VIEWS(){} function WIRES(){} // namespaces (hoisted below as objects)
+store.requestPersistence();
 syncTabs();
-render();
+try {
+  render();
+} catch (err) {
+  console.error(err);
+  app.innerHTML = `<div class="card"><h2>Something went wrong</h2>
+    <p class="hint">The view failed to render. Your saved data is safe. Try reloading; if it persists, reset from the Progress tab.</p>
+    <pre class="cite" style="white-space:pre-wrap">${escapeHtml(String(err && err.message || err))}</pre></div>`;
+}
