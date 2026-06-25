@@ -1,6 +1,7 @@
-// PFAi service worker — offline app shell.
-// Bump CACHE when shipping changes so clients pick up new assets.
-const CACHE = 'pfai-v1';
+// PFAi service worker — network-first so deploys propagate immediately, with a
+// cached app shell as the offline fallback. NEVER touches /api/* (dynamic).
+// Bump CACHE to force old caches to be purged on activate.
+const CACHE = 'pfai-v3';
 const SHELL = [
   './',
   './index.html',
@@ -29,18 +30,21 @@ self.addEventListener('activate', (e) => {
   );
 });
 
-// Cache-first for same-origin app shell; network passthrough for the rest
-// (e.g. the CDN pose model, which stays online-only by design).
+// Network-first for same-origin app files; fall back to cache when offline.
+// API and cross-origin requests are never intercepted or cached.
 self.addEventListener('fetch', (e) => {
   const url = new URL(e.request.url);
   if (e.request.method !== 'GET' || url.origin !== self.location.origin) return;
+  if (url.pathname.startsWith('/api/')) return; // dynamic — always hit network
   e.respondWith(
-    caches.match(e.request).then((hit) =>
-      hit || fetch(e.request).then((res) => {
-        const copy = res.clone();
-        caches.open(CACHE).then((c) => c.put(e.request, copy)).catch(() => {});
+    fetch(e.request)
+      .then((res) => {
+        if (res && res.ok) {
+          const copy = res.clone();
+          caches.open(CACHE).then((c) => c.put(e.request, copy)).catch(() => {});
+        }
         return res;
-      }).catch(() => caches.match('./index.html'))
-    )
+      })
+      .catch(() => caches.match(e.request).then((hit) => hit || caches.match('./index.html')))
   );
 });
