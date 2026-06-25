@@ -232,7 +232,6 @@ function resultPanel() {
     return `<h2>Assessment</h2><p class="hint">Enter at least one component to see your score, pass/fail status and where to improve.</p>${bodyPanel(body)}`;
   }
   const band = r.band;
-  const pct = r.composite;
   const passLine = r.complete
     ? (r.pass ? `<span class="badge tag-ok">PASS</span>` : `<span class="badge tag-fail">FAIL</span>`)
     : `<span class="pill">${r.enteredCount}/${r.requiredCount} components — partial</span>`;
@@ -242,9 +241,13 @@ function resultPanel() {
     const c = r.components[id];
     const title = comp.kind === 'body' ? comp.label : cap(id);
     if (!c) return `<div class="comp-bar"><div class="top"><span>${title}</span><span class="pill">not entered</span></div></div>`;
+    const estTag = c.table?.official === false ? ' <span class="pill" title="estimated — official chart pending">est</span>' : '';
+    if (c.passFail) {
+      return `<div class="comp-bar"><div class="top"><span>${title} <span class="pill">${exLabel(id, c.exercise)}</span></span>
+        <span class="${c.pass?'tag-ok':'tag-fail'}">${c.pass?'PASS':'FAIL'} <span class="pill">≤ ${fmtTime(c.table.maxTime)}</span></span></div></div>`;
+    }
     const fillPct = (c.points / c.maxPoints) * 100;
     const color = c.meetsMin ? (fillPct>=85?'var(--accent-2)':'var(--accent)') : 'var(--fail)';
-    const estTag = c.table?.official === false ? ' <span class="pill" title="estimated — official chart pending">est</span>' : '';
     const tag = comp.kind === 'body' ? `WHtR ${c.raw.toFixed(2)}` : exLabel(id, c.exercise);
     return `<div class="comp-bar">
       <div class="top"><span>${title} <span class="pill">${tag}</span>${estTag}</span>
@@ -252,6 +255,12 @@ function resultPanel() {
       <div class="track"><div class="fill" style="width:${fillPct}%;background:${color}"></div></div>
     </div>`;
   }).join('');
+
+  // Domain notes: WHtR Tier-2 gate (≥0.55) and the provisional walk caveat.
+  const notes = [];
+  const bc = r.components.body;
+  if (bc && bc.raw >= 0.55) notes.push(`Waist-to-height ${bc.raw.toFixed(2)} ≥ 0.55 — a Tier-2 body-fat assessment may apply.`);
+  if (r.hasPassFail) notes.push('2 km walk is a pass/fail alternate for members with a medical profile (AF Form 469). Official PFRA walk point-scoring is not yet released, so the composite here reflects only the scored components.');
 
   const gaps = gapAnalysis(r);
   const improve = gaps.map((g) => {
@@ -263,8 +272,8 @@ function resultPanel() {
   return `
   <h2>Assessment</h2>
   <div class="score-hero">
-    <div class="dial" style="--pct:${pct};--dial-color:${band.color}">
-      <div class="num"><b>${r.composite}</b><span>/ 100</span></div>
+    <div class="dial" style="--pct:${Math.round(r.composite / r.maxComposite * 100)};--dial-color:${band.color}">
+      <div class="num"><b>${r.composite}</b><span>/ ${r.maxComposite}</span></div>
     </div>
     <div>
       <div class="badge" style="background:${band.color};color:#02132b">${band.label}</div>
@@ -273,9 +282,10 @@ function resultPanel() {
     </div>
   </div>
   <div style="margin-top:14px">${bars}</div>
+  ${notes.map((n) => `<div class="warn-box" style="margin-top:10px">${n}</div>`).join('')}
   <h3 style="margin-top:16px">Where to improve <span class="pill">cheapest points first</span></h3>
   <ul class="clean">${improve}</ul>
-  ${getRulesetId() === 'pfa2026' ? '' : bodyPanel(body)}
+  ${getRulesetId() === 'pfa2026' || getRulesetId() === 'pfra_sof' ? '' : bodyPanel(body)}
   <div style="margin-top:14px"><button class="btn secondary" data-action="print">Print / save scorecard</button></div>
   <p class="cite">Scored under ${STANDARD.reference} ruleset v${STANDARD.rulesetVersion}.</p>`;
 }
@@ -431,7 +441,7 @@ VIEWS.simulator = function () {
     return `<div class="card"><h2>What-If Simulator</h2><p class="hint">Enter your current numbers on the Assess tab first, then come back to experiment.</p><div style="margin-top:12px"><a class="btn secondary" href="#assess">Go to Assess →</a></div></div>`;
   const sliders = componentsFor().filter((x) => !x.kind).map((x) => x.id).map((comp) => {
     const c = r.components[comp];
-    if (!c) return '';
+    if (!c || c.passFail) return ''; // pass/fail events (walk) have no slider
     const t = tableFor(draft.sex, draft.age, comp, c.exercise);
     const raws = t.anchors.map(a=>a[0]);
     const lo = Math.min(...raws), hi = Math.max(...raws);
