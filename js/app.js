@@ -878,7 +878,7 @@ VIEWS.about = function () {
     <div class="warn-box" style="margin-top:12px">${STANDARD.effectiveNote}</div>
     <h3 style="margin-top:16px">Bands</h3>
     <ul class="clean">${BANDS.map(b=>`<li><span class="badge" style="background:${b.color};color:#02132b">${b.label}</span> &nbsp; ${b.min}–${b.max===100?100:Math.floor(b.max)}</li>`).join('')}</ul>
-    <p class="cite">Official component minimums and maximum-point thresholds are used where available (legacy: all nine 5-year brackets, both sexes; PFRA-2026: under-25/60+ endpoints + the official waist-to-height curve). Intermediate points are interpolated; events marked <span class="pill">est</span> are adapted from the legacy charts pending verbatim transcription. Sources: USAF Fitness Assessment / PFRA Scoring charts.</p>
+    <p class="cite"><b>PFRA-2026</b> uses the <b>verbatim official charts</b> (every event, age bracket and sex) scored by exact threshold lookup — transcribed directly from the published PFRA Scoring Charts. <b>Legacy</b> uses official component minimums and maximum-point thresholds with intermediate points interpolated. Sources: USAF Fitness Assessment / PFRA Scoring charts.</p>
   </div>`;
 };
 
