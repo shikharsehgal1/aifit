@@ -20,19 +20,26 @@ function exLabel(comp, id) {
 
 let state = store.loadState();
 // Activate the persisted ruleset before deriving anything from STANDARD.
-setRuleset(state.settings.ruleset || 'legacy');
+setRuleset(state.settings.ruleset || 'pfa2026');
 setAltitude(state.settings.altitudeFt || 0);
 // Working assessment input (not yet saved). Rehydrate from the most recent
 // saved assessment so What-If / Plan stay usable across reloads.
 let draft = (() => {
-  const last = state.assessments.at(-1)?.input;
-  if (last?.components) return structuredClone(last);
+  const saved = state.draftInput || state.assessments.at(-1)?.input;
+  if (saved?.components) return structuredClone(saved);
+  const firstEx = (cid) => componentsFor().find((c) => c.id === cid)?.exercises[0]?.id;
   return {
     sex: state.profile.sex,
     age: state.profile.age,
-    components: { aerobic: { exercise: 'run_1_5mi', raw: '' }, strength: { exercise: 'pushups', raw: '' }, core: { exercise: 'plank', raw: '' } },
+    components: {
+      aerobic: { exercise: firstEx('aerobic') || 'run_1_5mi', raw: '' },
+      strength: { exercise: firstEx('strength') || 'pushups', raw: '' },
+      core: { exercise: firstEx('core') || 'plank', raw: '' },
+    },
   };
 })();
+// Keep the in-progress entry in memory so reloads don't lose typed numbers.
+function persistDraft() { state.draftInput = structuredClone(draft); persist(); }
 // Snap each component to an exercise the active ruleset actually offers,
 // clearing the raw value when the event changes (units may differ).
 function normalizeDraftToRuleset() {
@@ -166,12 +173,23 @@ function heroMarkup() {
 
 // ── View: ASSESS ─────────────────────────────────────────────────────────
 VIEWS.assess = function () {
+  const rsOpts = listRulesets().map((r) =>
+    `<option value="${r.id}" ${r.id===getRulesetId()?'selected':''}>${r.label}</option>`).join('');
   return `
   ${heroMarkup()}
   <div class="grid two">
     <div class="card">
-      <h2>Your details</h2>
-      <p class="hint">Enter as many or as few components as you like — the assessment adapts.</p>
+      <label>Scoring standard</label>
+      <select id="f-ruleset" class="select-strong">${rsOpts}</select>
+      <p class="hint" style="margin:6px 0 18px">${getRuleset().standard.reference}</p>
+
+      <label>Quick entry — type it in plain English</label>
+      <div class="chat" style="margin-top:0">
+        <input id="nl" placeholder="e.g. 28M ran 1.5 in 12:40, 38 pushups, 2:10 plank, 185 lb, 34 waist">
+        <button class="btn secondary" id="nl-go">Parse</button>
+      </div>
+
+      <h3 style="margin:22px 0 4px">Your details</h3>
       <div class="row">
         <div><label>Sex</label>
           <select id="f-sex">
@@ -188,11 +206,7 @@ VIEWS.assess = function () {
 
       ${componentsFor().filter((c) => !c.kind).map((c) => c.id).map(compInputBlock).join('')}
 
-      <div class="chat">
-        <input id="nl" placeholder="Or just type: '28M ran 1.5 in 12:40, 38 pushups, 2:10 plank, 185 lbs, 34 waist'">
-        <button class="btn secondary" id="nl-go">Parse</button>
-      </div>
-      <div style="margin-top:12px; display:flex; gap:8px;">
+      <div style="margin-top:16px; display:flex; gap:8px;">
         <button class="btn" id="save">Save assessment</button>
       </div>
     </div>
@@ -338,6 +352,14 @@ function bodyPanel(body) {
 }
 
 WIRES.assess = function () {
+  $('#f-ruleset').onchange = (e) => {
+    setRuleset(e.target.value);
+    state.settings.ruleset = e.target.value;
+    persist();
+    normalizeDraftToRuleset();
+    render();
+    toast(`Scoring with ${getRuleset().label}.`);
+  };
   $('#f-sex').onchange = (e) => { draft.sex = e.target.value; state.profile.sex = e.target.value; refreshResult(); };
   $('#f-age').oninput = (e) => { draft.age = clamp(+e.target.value||25,17,65); refreshResult(); };
   $('#f-height').oninput = (e) => { state.profile.height = clamp(+e.target.value||70,58,80); refreshResult(); };
@@ -348,6 +370,7 @@ WIRES.assess = function () {
       const comp = e.target.dataset.ex;
       draft.components[comp].exercise = e.target.value;
       draft.components[comp].raw = ''; // unit may change
+      persistDraft();
       render();
     };
   });
@@ -366,6 +389,7 @@ WIRES.assess = function () {
       parsed = parseNaturalLanguage(text);
     }
     applyParsed(parsed);
+    persistDraft();
     render();
     toast(`Parsed via ${via}.`);
   };
@@ -381,6 +405,7 @@ WIRES.assess = function () {
 };
 
 function refreshResult() {
+  persistDraft();
   const card = document.getElementById('result-card');
   if (card) card.innerHTML = resultPanel();
 }
@@ -418,13 +443,14 @@ VIEWS.simulator = function () {
   }).join('');
   return `<div class="card">
     <h2>What-If Simulator</h2>
-    <p class="hint">Drag to see how each change moves your composite and pass/fail in real time. Best place to find your cheapest points.</p>
-    <div class="score-hero" style="margin:10px 0">
+    <p class="hint" style="max-width:640px">See your score <b style="color:var(--ink)">before you train for it.</b> Drag any event to a target you think you could hit — your composite and PASS/FAIL update live, so you can find where a little effort buys the most points. Nothing here is saved; it's a sandbox on top of your current Assess numbers.</p>
+    <div class="score-hero" style="margin:16px 0 6px">
       <div class="dial" id="sim-dial" style="--pct:${r.composite};--dial-color:${r.band.color}">
         <div class="num"><b id="sim-score">${r.composite}</b><span>/ 100</span></div>
       </div>
       <div id="sim-verdict"></div>
     </div>
+    <h3 style="margin:18px 0 4px">Drag to set a target</h3>
     ${sliders}
   </div>`;
 };
@@ -572,7 +598,7 @@ VIEWS.plan = function () {
       <input id="s-alt" type="number" min="0" max="15000" step="100" placeholder="e.g. 0 (sea level)" value="${state.settings.altitudeFt||''}">
       <div style="margin-top:12px"><button class="btn" id="gen">Generate plan</button></div>
     </div>
-    <div class="card" id="plan-card"><h2>Your regimen</h2><p class="hint">Set your details and generate a periodised plan focused on your highest-value gaps.</p></div>
+    <div class="card" id="plan-card">${state.plan?.reg ? planMarkup(state.plan.reg) : '<h2>Your regimen <span class="beta">ai</span></h2><p class="hint">Set your details and generate a periodised plan focused on your highest-value gaps. It saves automatically and is here when you come back.</p>'}</div>
   </div>`;
 };
 WIRES.plan = function () {
@@ -590,39 +616,81 @@ WIRES.plan = function () {
       equipment: state.settings.equipment, injuries: state.settings.injuries,
       body: currentBody(),
     });
+    state.plan = { reg, ts: Date.now(), goalDate: state.goal.date };
+    persist();
     $('#plan-card').innerHTML = planMarkup(reg);
-    wirePlanLog();
+    wirePlan();
+    toast('Plan saved.');
   };
+  if (state.plan?.reg) wirePlan(); // wire the restored plan's buttons/checkboxes
 };
 function planMarkup(reg) {
   const colors = { aerobic:'var(--accent)', strength:'var(--warn)', core:'var(--accent-2)', conditioning:'#b06fd0' };
+  const done = new Set(state.logs.filter(l=>l.done).map(l=>l.note));
   const weeks = reg.plan.map((w) => `
     <div class="week">
       <h3><span>Week ${w.week}</span><span class="pill">${w.phase}</span></h3>
       ${w.sessions.map((s,i)=>`<div class="session">
         <span class="dot" style="background:${colors[s.component]||'#888'}"></span>
         <span style="flex:1"><b>${cap(s.component)}</b> — ${s.prescription}</span>
-        <input type="checkbox" data-log="${w.week}-${i}" title="mark done">
+        <input type="checkbox" data-log="${w.week}-${i}" title="mark done" ${done.has(`${w.week}-${i}`)?'checked':''}>
       </div>`).join('')}
     </div>`).join('');
   const legend = `<div class="legend">${Object.entries(colors).map(([k,c]) =>
     `<span><i style="background:${c}"></i>${cap(k)}</span>`).join('')}</div>`;
-  return `<h2>Your regimen <span class="pill">${reg.weeks} weeks</span></h2>
-    <div class="muted-box" style="margin-bottom:14px">${reg.rationale.map(l=>`<div>${l}</div>`).join('')}</div>
+  return `<div style="display:flex;justify-content:space-between;align-items:center;gap:8px">
+      <h2 style="margin:0">Your regimen <span class="pill">${reg.weeks} weeks</span></h2>
+      <button class="btn secondary" id="plan-dl" style="padding:6px 12px">Download .ics</button>
+    </div>
+    <div class="muted-box" style="margin:14px 0">${reg.rationale.map(l=>`<div>${l}</div>`).join('')}</div>
     ${legend}
     ${weeks}`;
 }
-function wirePlanLog() {
+function wirePlan() {
+  const dl = $('#plan-dl'); if (dl) dl.onclick = () => downloadPlanICS(state.plan?.reg);
   app.querySelectorAll('[data-log]').forEach((cb) => {
     cb.onchange = (e) => {
+      const note = e.target.dataset.log;
       if (e.target.checked) {
-        state.logs.push({ ts: Date.now(), type: 'session', note: e.target.dataset.log, done: true });
+        if (!state.logs.some(l=>l.note===note && l.done)) state.logs.push({ ts: Date.now(), type: 'session', note, done: true });
         const earned = store.evaluateBadges(state, state.assessments.at(-1)?.result);
         persist();
         toast(earned.length ? `Logged! Earned: ${earned.map(b=>b.label).join(', ')}` : 'Workout logged.');
+      } else {
+        state.logs = state.logs.filter(l => !(l.note === note && l.done));
+        persist();
       }
     };
   });
+}
+// Build a calendar (.ics) of the plan. Sessions are spread one-per-day from a
+// start date: counting back from the goal date if set, else from today.
+function downloadPlanICS(reg) {
+  if (!reg) return toast('Generate a plan first.');
+  const dayMs = 86400000;
+  const start = state.plan?.goalDate
+    ? new Date(new Date(state.plan.goalDate).getTime() - reg.weeks * 7 * dayMs)
+    : new Date();
+  const pad = (n) => String(n).padStart(2, '0');
+  const ymd = (d) => `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}`;
+  const lines = ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//PFAi//Training Plan//EN', 'CALSCALE:GREGORIAN'];
+  reg.plan.forEach((w, wi) => {
+    w.sessions.forEach((s, si) => {
+      const d = new Date(start.getTime() + (wi * 7 + (si % 7)) * dayMs);
+      const dn = new Date(d.getTime() + dayMs);
+      lines.push('BEGIN:VEVENT',
+        `UID:pfai-${wi}-${si}-${ymd(d)}@pfai`,
+        `DTSTART;VALUE=DATE:${ymd(d)}`,
+        `DTEND;VALUE=DATE:${ymd(dn)}`,
+        `SUMMARY:PFAi W${w.week}: ${cap(s.component)} — ${s.prescription.replace(/[\n,]/g, ' ')}`,
+        'END:VEVENT');
+    });
+  });
+  lines.push('END:VCALENDAR');
+  const blob = new Blob([lines.join('\r\n')], { type: 'text/calendar' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob); a.download = 'pfai-training-plan.ics'; a.click();
+  toast('Calendar downloaded — import it into your calendar app.');
 }
 
 // ── View: PROGRESS ─────────────────────────────────────────────────────────
@@ -798,19 +866,10 @@ WIRES.leader = function () {
 
 // ── View: ABOUT / STANDARDS ─────────────────────────────────────────────────
 VIEWS.about = function () {
-  const active = getRuleset();
   const weights = Object.entries(STANDARD.weights).map(([k, v]) => `${cap(k)} ${v}`).join(' / ');
-  const rsOpts = listRulesets().map((r) =>
-    `<option value="${r.id}" ${r.id===getRulesetId()?'selected':''}>${r.label}</option>`).join('');
-  const previewBanner = active.preview
-    ? `<div class="warn-box" style="margin-bottom:14px">⚠ <b>Preview ruleset.</b> The PFRA-2026 point tables are provisional pending official publication, and the 20-point waist-to-height component is not yet scored here. Switch to the Legacy ruleset for scored assessments.</div>`
-    : '';
   return `<div class="card">
     <h2>Standards & data provenance</h2>
-    ${previewBanner}
-    <label>Active ruleset</label>
-    <select id="rs-select">${rsOpts}</select>
-    <div style="margin-top:16px"></div>
+    <p class="hint" style="margin-bottom:16px">Active standard: <b style="color:var(--ink)">${getRuleset().label}</b> — switch it at the top of the <a href="#assess">Assess</a> tab.</p>
     <div class="kv"><span>Authority</span><b>${STANDARD.authority}</b></div>
     <div class="kv"><span>Reference</span><b>${STANDARD.reference}</b></div>
     <div class="kv"><span>Ruleset version</span><b>${STANDARD.rulesetVersion}</b></div>
@@ -819,18 +878,8 @@ VIEWS.about = function () {
     <div class="warn-box" style="margin-top:12px">${STANDARD.effectiveNote}</div>
     <h3 style="margin-top:16px">Bands</h3>
     <ul class="clean">${BANDS.map(b=>`<li><span class="badge" style="background:${b.color};color:#02132b">${b.label}</span> &nbsp; ${b.min}–${b.max===100?100:Math.floor(b.max)}</li>`).join('')}</ul>
-    <p class="cite">1.5-mile run, push-up and sit-up tables carry official component minimums and maximum-point thresholds for all nine 5-year age brackets (both sexes); intermediate points are interpolated between official anchors. Events marked <span class="pill">est</span> are estimates pending verbatim transcription. Sources: USAF Fitness Assessment Scoring charts (Final Version), 2022.</p>
+    <p class="cite">Official component minimums and maximum-point thresholds are used where available (legacy: all nine 5-year brackets, both sexes; PFRA-2026: under-25/60+ endpoints + the official waist-to-height curve). Intermediate points are interpolated; events marked <span class="pill">est</span> are adapted from the legacy charts pending verbatim transcription. Sources: USAF Fitness Assessment / PFRA Scoring charts.</p>
   </div>`;
-};
-WIRES.about = function () {
-  $('#rs-select').onchange = (e) => {
-    setRuleset(e.target.value);
-    state.settings.ruleset = e.target.value;
-    persist();
-    normalizeDraftToRuleset();
-    render();
-    toast(`Switched to ${getRuleset().label}.`);
-  };
 };
 
 // ── boot ─────────────────────────────────────────────────────────────────
