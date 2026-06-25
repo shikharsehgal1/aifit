@@ -54,6 +54,15 @@ export function scoreComponent(sex, age, component, exercise, raw) {
   const table = tableFor(sex, age, component, exercise);
   if (!table) return null;
   const value = Number(raw);
+  // Pass/fail alternate (e.g. 2 km walk) — no scored points.
+  if (table.passFail) {
+    const pass = table.betterDirection === 'lower' ? value <= table.maxTime : value >= table.maxTime;
+    return {
+      component, exercise, raw: value, unit: table.unit, passFail: true, pass,
+      points: 0, maxPoints: table.maxPoints, min: table.min, betterDirection: table.betterDirection,
+      meetsMin: pass, table,
+    };
+  }
   const raw_points = table.step ? stepPoints(table, value) : interpolatePoints(table, value);
   const points = Math.max(0, Math.min(table.maxPoints, raw_points));
   const meetsMin =
@@ -96,6 +105,7 @@ export function scoreAssessment(input) {
   let anyComponentFail = false;
   let enteredCount = 0;
 
+  let hasPassFail = false;
   for (const comp of comps) {
     let r = null;
     if (comp.kind === 'body') {
@@ -108,17 +118,21 @@ export function scoreAssessment(input) {
     }
     scored[comp.id] = r;
     if (r) {
-      total += r.points;
       enteredCount++;
-      if (!r.meetsMin) anyComponentFail = true;
+      if (r.passFail) { hasPassFail = true; if (!r.pass) anyComponentFail = true; }
+      else { total += r.points; if (!r.meetsMin) anyComponentFail = true; }
     }
   }
 
   const composite = round1(total);
+  // Pass/fail components (walk) are unscored, so drop their weight from the max.
+  const maxComposite = comps.reduce((s, c) => s + (scored[c.id]?.passFail ? 0 : (c.weight ?? 0)), 0) || 100;
   const requiredCount = comps.length;
   const complete = enteredCount === requiredCount;
   const meetsComposite = composite >= STANDARD.passComposite;
-  const pass = complete ? meetsComposite && !anyComponentFail : null; // null = incomplete
+  // With a pass/fail event, the composite threshold doesn't apply; pass = every
+  // component meets its minimum (approximation of the run-exempt path).
+  const pass = !complete ? null : hasPassFail ? !anyComponentFail : (meetsComposite && !anyComponentFail);
   const band = bandFor(composite);
 
   return {
@@ -127,12 +141,13 @@ export function scoreAssessment(input) {
     rulesetVersion: STANDARD.rulesetVersion,
     components: scored,
     composite,
-    maxComposite: comps.reduce((s, c) => s + (c.weight ?? 0), 0) || 100,
+    maxComposite,
     enteredCount,
     requiredCount,
     complete,
     meetsComposite,
     anyComponentFail,
+    hasPassFail,
     pass,
     band,
   };
