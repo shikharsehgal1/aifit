@@ -2,8 +2,10 @@
 // Structured so a future API/DB swap only touches this module.
 
 const KEY = 'pfai.state.v1';
+const SCHEMA = 2;
 
 const DEFAULT = {
+  schemaVersion: SCHEMA,
   profile: { sex: 'male', age: 25, height: 70, weight: 180, waist: 36, branch: 'usaf' },
   goal: { date: null, target: 'pass' }, // target: 'pass' | 'satisfactory' | 'excellent'
   settings: { daysPerWeek: 4, equipment: 'gym', injuries: '', reminders: false, ruleset: 'pfa2026', altitudeFt: 0 },
@@ -16,18 +18,55 @@ const DEFAULT = {
   unit: { id: null, members: [] }, // leader view roster (on-device)
 };
 
+// Deep-merge a parsed blob onto DEFAULT so returning users gain any new nested
+// fields (the old shallow merge silently dropped them — a real data bug).
+function migrate(parsed) {
+  const base = structuredClone(DEFAULT);
+  for (const k of Object.keys(base)) {
+    const v = parsed[k];
+    if (v == null) continue;
+    if (Array.isArray(base[k]) || typeof base[k] !== 'object' || base[k] === null) base[k] = v;
+    else base[k] = { ...base[k], ...v }; // nested objects: profile/goal/settings/unit
+  }
+  base.schemaVersion = SCHEMA;
+  return base;
+}
+
 export function loadState() {
   try {
     const raw = localStorage.getItem(KEY);
     if (!raw) return structuredClone(DEFAULT);
-    return { ...structuredClone(DEFAULT), ...JSON.parse(raw) };
+    return migrate(JSON.parse(raw));
   } catch {
     return structuredClone(DEFAULT);
   }
 }
 
 export function saveState(state) {
-  localStorage.setItem(KEY, JSON.stringify(state));
+  try {
+    localStorage.setItem(KEY, JSON.stringify(state));
+    return true;
+  } catch (e) {
+    return false; // e.g. QuotaExceededError — caller can warn the user
+  }
+}
+
+// Full backup/restore (round-trips exportJSON). Returns the migrated state or
+// throws on an unreadable file.
+export function importJSON(text) {
+  const parsed = JSON.parse(text);
+  if (!parsed || typeof parsed !== 'object' || !('profile' in parsed || 'assessments' in parsed)) {
+    throw new Error('Not a PFAi backup file.');
+  }
+  const state = migrate(parsed);
+  saveState(state);
+  return state;
+}
+
+// Ask the browser to keep our data (iOS Safari evicts script localStorage after
+// ~7 days idle unless installed/persisted). Best-effort, no-op if unsupported.
+export function requestPersistence() {
+  try { navigator.storage?.persist?.(); } catch {}
 }
 
 export function recordAssessment(state, input, result, ts) {
