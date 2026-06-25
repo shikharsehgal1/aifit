@@ -7,10 +7,22 @@ import {
   bandFor,
   tableFor,
   componentsFor,
-  WHTR,
+  bodyTable,
   MAX_WEIGHT_BY_HEIGHT,
   WAIST_MAX,
 } from './data/standards.js';
+
+// Exact step lookup for official PFRA tables (anchors are [threshold, points]
+// in points-descending order). Returns the points for the row the raw meets.
+function stepPoints(table, raw) {
+  const a = table.anchors;
+  const higher = table.betterDirection === 'higher';
+  for (let i = 0; i < a.length; i++) {
+    const [thr, pts] = a[i];
+    if (higher ? raw >= thr : raw <= thr) return pts;
+  }
+  return a[a.length - 1][1]; // below the minimum row → floor points
+}
 
 // Linear interpolation across an anchor table. Anchors are [raw, points].
 // Works regardless of anchor ordering.
@@ -42,7 +54,8 @@ export function scoreComponent(sex, age, component, exercise, raw) {
   const table = tableFor(sex, age, component, exercise);
   if (!table) return null;
   const value = Number(raw);
-  const points = Math.max(0, Math.min(table.maxPoints, interpolatePoints(table, value)));
+  const raw_points = table.step ? stepPoints(table, value) : interpolatePoints(table, value);
+  const points = Math.max(0, Math.min(table.maxPoints, raw_points));
   const meetsMin =
     table.betterDirection === 'higher' ? value >= table.min : value <= table.min;
   return {
@@ -60,15 +73,16 @@ export function scoreComponent(sex, age, component, exercise, raw) {
 }
 
 // Score the waist-to-height-ratio body component (PFRA-2026).
-export function scoreBody(body, maxPoints = WHTR.maxPoints) {
+export function scoreBody(body) {
   if (!body || !body.waist || !body.height) return null;
   const ratio = body.waist / body.height;
-  const points = Math.max(0, Math.min(maxPoints, interpolatePoints(WHTR, ratio)));
+  const table = bodyTable();
+  const points = Math.max(0, Math.min(table.maxPoints, stepPoints(table, ratio)));
   return {
     component: 'body', exercise: 'whtr', raw: ratio, unit: 'ratio',
-    points: round1(points), maxPoints, min: WHTR.min, betterDirection: 'lower',
-    meetsMin: ratio < WHTR.min, // scores above zero
-    table: { official: true, anchors: WHTR.anchors, betterDirection: 'lower' },
+    points: round1(points), maxPoints: table.maxPoints, min: table.min, betterDirection: 'lower',
+    meetsMin: true, // body composition is scored; no documented hard component minimum
+    table,
   };
 }
 
@@ -85,7 +99,7 @@ export function scoreAssessment(input) {
   for (const comp of comps) {
     let r = null;
     if (comp.kind === 'body') {
-      r = scoreBody(body, comp.weight);
+      r = scoreBody(body);
     } else {
       const sel = components[comp.id];
       if (sel && sel.raw != null && sel.raw !== '') {
