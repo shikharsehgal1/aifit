@@ -1,4 +1,5 @@
 // PFAi — USAF Physical Fitness Assessment standards & scoring data
+import { PFRA2026 } from './pfra2026.js';
 //
 // ── DATA PROVENANCE ────────────────────────────────────────────────────────
 // LEGACY ruleset (the scored PFA in use through early 2026): the 1.5-mile run,
@@ -115,39 +116,25 @@ function altTable(sex, exercise, bracketKey) {
 }
 
 // ── PFRA-2026 tables ───────────────────────────────────────────────────────
-// Official endpoints (under-25 and 60+, both sexes) from the published 2026
-// charts; middle brackets are age-interpolated between them. Run scores 50→35,
-// strength/core 15→2.5. Times in seconds, reps as counts.
-const PFRA26 = {
-  male:   { run: { max: [805, 1018], min: [1185, 1440] }, hrp: { max: [52, 36], min: [27, 11] }, plank: { max: [220, 180], min: [95, 55] } },
-  female: { run: { max: [930, 1100], min: [1523, 1780] }, hrp: { max: [42, 26], min: [17, 1] }, plank: { max: [215, 175], min: [90, 50] } },
-};
-const PFRA26_AGE = { u25: 22, '25_29': 27, '30_34': 32, '35_39': 37, '40_44': 42, '45_49': 47, '50_54': 52, '55_59': 57, '60p': 62 };
-const lerp26 = (a, v22, v62) => Math.round(v22 + (a - 22) / 40 * (v62 - v22));
-function pfra26Table(sex, brKey, exercise) {
-  const a = PFRA26_AGE[brKey] ?? 22;
-  const E = PFRA26[sex];
-  if (!E) return null;
-  if (exercise === 'run_2mi') {
-    const max = lerp26(a, ...E.run.max), min = lerp26(a, ...E.run.min);
-    return { unit: 'seconds', betterDirection: 'lower', maxPoints: 50, min, official: a === 22 || a === 62, anchors: [[max, 50], [min, 35]] };
-  }
-  if (exercise === 'hrp') {
-    const max = lerp26(a, ...E.hrp.max), min = lerp26(a, ...E.hrp.min);
-    return { unit: 'reps', betterDirection: 'higher', maxPoints: 15, min, official: a === 22 || a === 62, anchors: [[0, 0], [min, 2.5], [max, 15]] };
-  }
-  if (exercise === 'plank') {
-    const max = lerp26(a, ...E.plank.max), min = lerp26(a, ...E.plank.min);
-    return { unit: 'seconds', betterDirection: 'higher', maxPoints: 15, min, official: a === 22 || a === 62, anchors: [[0, 0], [min, 2.5], [max, 15]] };
-  }
-  return null;
+// PFRA-2026 exact step tables, built from the verbatim official charts
+// (see js/data/pfra2026.js). Each event scores by exact threshold lookup.
+const EX2PFRA = { run_2mi: 'run2mi', hamr: 'hamr', pushups: 'pushup', hrp: 'hrp', situps: 'situp', crunches: 'crunch', plank: 'plank' };
+function pfra2026Table(sex, brKey, exercise) {
+  const d = PFRA2026[EX2PFRA[exercise]];
+  if (!d) return null;
+  const col = d[sex === 'female' ? 'F' : 'M']?.[brKey];
+  if (!col) return null;
+  const anchors = d.ladder.map((pts, i) => [col[i], pts]).filter((a) => a[0] != null);
+  return { unit: d.unit, betterDirection: d.dir, maxPoints: d.ladder[0], min: anchors[anchors.length - 1][0], step: true, official: true, anchors };
 }
-// Waist-to-height ratio scoring (20 pts) — official universal curve, age/sex
-// independent. Lower is better; ≤0.49→20, 0.52→17, 0.55→12.5, ≥0.60→0.
-export const WHTR = {
-  unit: 'ratio', betterDirection: 'lower', maxPoints: 20, min: 0.60, official: true,
-  anchors: [[0.40, 20], [0.49, 20], [0.52, 17], [0.55, 12.5], [0.60, 0]],
-};
+// Waist-to-height ratio (20 pts) — official universal curve, age/sex independent.
+export function bodyTable() {
+  const d = PFRA2026.whtr;
+  return {
+    unit: 'ratio', betterDirection: 'lower', maxPoints: 20, min: 0.60, step: true, official: true,
+    anchors: d.ladder.map((pts, i) => [d.vals[i], pts]),
+  };
+}
 
 // ── Bands ────────────────────────────────────────────────────────────────
 // Official composite categories: Excellent ≥90, Satisfactory 75–89.9,
@@ -188,8 +175,8 @@ export const RULESETS = {
     standard: {
       authority: 'U.S. Air Force',
       reference: 'DAFMAN 36-2905, Physical Fitness Readiness Assessment (eff. 1 Mar 2026)',
-      rulesetVersion: '1.0.0-pfra2026',
-      effectiveNote: '100-point model: 2-mile run 50, waist-to-height ratio 20, strength 15, core 15. Run / hand-release push-up / plank thresholds are official at the under-25 and 60+ endpoints and age-interpolated for the middle brackets; the waist-to-height curve is official.',
+      rulesetVersion: '2.0.0-pfra2026',
+      effectiveNote: '100-point model: 2-mile run 50, waist-to-height ratio 20, strength 15, core 15. All event tables (2-mile run, 20m HAMR, push-up, hand-release push-up, sit-up, cross-leg reverse crunch, forearm plank, WHtR) are the verbatim official charts, every age bracket and sex, scored by exact threshold lookup.',
       weights: { aerobic: 50, body: 20, strength: 15, core: 15 },
       passComposite: 75,
     },
@@ -197,7 +184,6 @@ export const RULESETS = {
     components: [
       { id: 'aerobic', label: 'Cardio', weight: 50, exercises: [
         { id: 'run_2mi', label: '2-mile run' },
-        { id: 'run_1_5mi', label: '1.5-mile run' },
         { id: 'hamr', label: '20m HAMR shuttles' },
       ] },
       { id: 'body', label: 'Waist-to-height', weight: 20, kind: 'body', exercises: [] },
@@ -255,38 +241,23 @@ function scaleMax(table, targetMax) {
 }
 
 // ── Table lookup (sex, age, component, exercise) ───────────────────────────
-const PFRA26_NATIVE = new Set(['run_2mi', 'hrp', 'plank']);
-
 export function tableFor(sex, age, component, exercise) {
   const br = bracketFor(age);
-  const is2026 = activeId === 'pfa2026';
   let t = null;
 
-  // PFRA-2026 official tables (2-mile run, hand-release push-ups, plank).
-  if (is2026 && PFRA26_NATIVE.has(exercise)) {
-    t = pfra26Table(sex, br.key, exercise);
+  // PFRA-2026 — exact official step tables for every event.
+  if (activeId === 'pfa2026') {
+    t = pfra2026Table(sex, br.key, exercise);
   }
-  // Legacy official primary events (also serve as 2026 alternates, rescaled).
+  // Legacy official primary events + estimated alternates.
   else if (exercise === 'run_1_5mi' && RUN[sex]?.[br.key]) t = runTable(RUN[sex][br.key]);
   else if (exercise === 'pushups' && PUSHUP[sex]?.[br.key]) { const [min, max] = PUSHUP[sex][br.key]; t = repTable(min, max, 10, 1); }
   else if (exercise === 'situps' && SITUP[sex]?.[br.key]) { const [min, max] = SITUP[sex][br.key]; t = repTable(min, max, 12, 3); }
-  // Estimated alternates (HAMR, cross-leg crunch, etc.).
   else t = altTable(sex, exercise, br.key);
 
   if (!t) return null;
 
-  if (is2026) {
-    // Rescale every event to its 2026 component weight (cardio 50, str/core 15).
-    const target = component === 'aerobic' ? 50 : component === 'body' ? 20 : 15;
-    t = scaleMax(t, target);
-    // Only the native PFRA events carry official 2026 values; the rest are
-    // estimates adapted from the legacy charts.
-    if (!PFRA26_NATIVE.has(exercise)) t = { ...t, official: false };
-  } else if (t.unit === 'reps' && t.maxPoints !== 20) {
-    t = scaleMax(t, 20);
-  }
-
-  // Relax run times at altitude (estimate).
+  // Relax run times at altitude (estimate; doesn't apply to step tables yet).
   const off = runAltitudeOffset();
   if (off && t.betterDirection === 'lower') {
     t = { ...t, min: t.min + off, anchors: t.anchors.map(([s, p]) => [s + off, p]), altitudeOffset: off };
