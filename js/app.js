@@ -65,8 +65,44 @@ const $ = (s, r = document) => r.querySelector(s);
 // Delegated actions survive innerHTML re-renders of view content.
 app.addEventListener('click', (e) => {
   const a = e.target.closest('[data-action]');
-  if (a?.dataset.action === 'print') printScorecard();
+  if (!a) return;
+  if (a.dataset.action === 'print') printScorecard();
+  else if (a.dataset.action === 'share') shareResult();
 });
+
+const b64url = {
+  enc: (s) => btoa(unescape(encodeURIComponent(s))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, ''),
+  dec: (s) => decodeURIComponent(escape(atob(s.replace(/-/g, '+').replace(/_/g, '/')))),
+};
+// Encode the current entry into a shareable URL and share/copy it.
+function shareResult() {
+  const r = currentResult();
+  if (r.enteredCount === 0) return toast('Enter your numbers first.');
+  const p = { v: 1, rs: getRulesetId(), s: draft.sex, a: draft.age, w: state.profile.waist, h: state.profile.height,
+    c: Object.fromEntries(Object.entries(draft.components).map(([k, v]) => [k, [v.exercise, v.raw]])) };
+  const url = `${location.origin}${location.pathname}#assess&d=${b64url.enc(JSON.stringify(p))}`;
+  const text = `PFAi estimate: ${r.composite}/${r.maxComposite} — ${r.band.label}${r.complete ? (r.pass ? ' (PASS)' : ' (FAIL)') : ''}`;
+  if (navigator.share) navigator.share({ title: 'PFAi', text, url }).catch(() => {});
+  else if (navigator.clipboard) navigator.clipboard.writeText(url).then(() => toast('Share link copied to clipboard.'), () => toast('Copy failed.'));
+  else toast('Sharing not supported here.');
+}
+// Hydrate the draft from a shared link (#assess&d=…), then clean the URL.
+function applyShared() {
+  const m = location.hash.match(/[?&]d=([^&]+)/);
+  if (!m) return;
+  try {
+    const p = JSON.parse(b64url.dec(m[1]));
+    if (p.rs && RULESETS_HAS(p.rs)) { setRuleset(p.rs); state.settings.ruleset = p.rs; }
+    if (p.s) draft.sex = p.s === 'female' ? 'female' : 'male';
+    if (p.a) draft.age = clamp(+p.a || 25, 17, 65);
+    if (p.w) state.profile.waist = clamp(+p.w || 36, 25, 60);
+    if (p.h) state.profile.height = clamp(+p.h || 70, 58, 80);
+    if (p.c) for (const k of ['aerobic', 'strength', 'core']) { const e = p.c[k]; if (e) draft.components[k] = { exercise: e[0], raw: e[1] }; }
+    normalizeDraftToRuleset();
+    history.replaceState(null, '', location.pathname + '#assess');
+  } catch {}
+}
+function RULESETS_HAS(id) { return listRulesets().some((r) => r.id === id); }
 
 // ── Routing ──────────────────────────────────────────────────────────────
 // Hash-based so refresh, back/forward and deep links all work.
@@ -270,6 +306,8 @@ function resultPanel() {
     return `<li><b>${cap(g.component)}</b> — ${tag}</li>`;
   }).join('');
 
+  const targetBlock = targetMarkup(r);
+
   return `
   <h2>Assessment</h2>
   <div class="score-hero">
@@ -286,9 +324,50 @@ function resultPanel() {
   ${notes.map((n) => `<div class="warn-box" style="margin-top:10px">${n}</div>`).join('')}
   <h3 style="margin-top:16px">Where to improve <span class="pill">cheapest points first</span></h3>
   <ul class="clean">${improve}</ul>
+  ${targetBlock}
   ${getRulesetId() === 'pfa2026' || getRulesetId() === 'pfra_sof' ? '' : bodyPanel(body)}
-  <div style="margin-top:14px"><button class="btn secondary" data-action="print">Print / save scorecard</button></div>
+  <div style="margin-top:14px;display:flex;gap:8px;flex-wrap:wrap">
+    <button class="btn secondary" data-action="print">Print / save scorecard</button>
+    <button class="btn secondary" data-action="share">Share result</button>
+  </div>
   <p class="cite">Scored under ${STANDARD.reference} ruleset v${STANDARD.rulesetVersion}.</p>`;
+}
+
+// Reverse calculator: the raw number you'd need in each event to reach the next
+// meaningful goal (pass 75 → excellent 90 → max), if the gain came from there.
+function targetMarkup(r) {
+  if (!r.complete || r.hasPassFail) return '';
+  const goals = [STANDARD.passComposite, 90, r.maxComposite].filter((g, i, a) => a.indexOf(g) === i);
+  const goal = goals.find((g) => g > r.composite);
+  if (goal == null) return ''; // already maxed
+  const deficit = round1(goal - r.composite);
+  const rows = componentsFor().map((comp) => {
+    const c = r.components[comp.id];
+    if (!c || c.passFail || comp.kind === 'body') return '';
+    const need = c.points + deficit;
+    if (need > c.maxPoints + 0.001) return `<li><b>${cap(comp.id)}</b> — <span class="muted">+${round1(c.maxPoints - c.points)} max (not enough alone)</span></li>`;
+    const tgt = rawForPointsLabel(draft.sex, draft.age, comp.id, c.exercise, need);
+    if (!tgt) return '';
+    return `<li><b>${cap(comp.id)}</b> — reach <b style="color:var(--ink)">${tgt}</b> <span class="muted">(${exLabel(comp.id, c.exercise)})</span></li>`;
+  }).join('');
+  const label = goal === STANDARD.passComposite ? 'pass (75)' : goal === 90 ? 'Excellent (90)' : `max (${r.maxComposite})`;
+  return `<h3 style="margin-top:16px">To reach ${label} <span class="pill">need +${deficit}</span></h3>
+    <p class="hint" style="margin:2px 0 6px">Hit any one of these (others unchanged):</p>
+    <ul class="clean">${rows}</ul>`;
+}
+
+// Raw value (formatted) needed in one event to score `points`.
+function rawForPointsLabel(sex, age, component, exercise, points) {
+  const t = tableFor(sex, age, component, exercise);
+  if (!t) return null;
+  const anchors = [...t.anchors].sort((a, b) => a[1] - b[1]); // by points asc
+  let raw = null;
+  for (let i = 0; i < anchors.length - 1; i++) {
+    const [x0, y0] = anchors[i], [x1, y1] = anchors[i + 1];
+    if (points >= y0 && points <= y1) { raw = x0 + (points - y0) / (y1 - y0 || 1) * (x1 - x0); break; }
+  }
+  if (raw == null) raw = anchors[anchors.length - 1][0];
+  return t.unit === 'seconds' ? fmtTime(Math.round(raw)) : `${Math.round(raw)}${t.unit === 'shuttles' ? ' shuttles' : ' reps'}`;
 }
 
 // Open a clean, printable scorecard for the current assessment.
@@ -407,11 +486,14 @@ WIRES.assess = function () {
   $('#save').onclick = () => {
     const r = currentResult();
     if (r.enteredCount === 0) return toast('Enter at least one component first.');
+    const prevBest = Math.max(0, ...store.trendSeries(state, 'composite').map((p) => p.value));
+    const isPR = r.complete && state.assessments.length > 0 && r.composite > prevBest;
     persistProfile();
     store.recordAssessment(state, structuredClone(draft), r, Date.now());
     const newBadges = store.evaluateBadges(state, r);
     persist();
-    toast(newBadges.length ? `Saved! Earned: ${newBadges.map(b=>b.label).join(', ')}` : 'Assessment saved.');
+    const extra = newBadges.length ? ` Earned: ${newBadges.map(b=>b.label).join(', ')}` : '';
+    toast(isPR ? `🎉 New personal best — ${r.composite}!${extra}` : `Assessment saved.${extra}`);
   };
 };
 
@@ -956,6 +1038,7 @@ function normalizeParsed(p) {
 }
 function VIEWS(){} function WIRES(){} // namespaces (hoisted below as objects)
 store.requestPersistence();
+applyShared();
 syncTabs();
 try {
   render();
