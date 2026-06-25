@@ -195,10 +195,21 @@ export const RULESETS = {
     },
     bands: LEGACY_BANDS,
     components: [
-      { id: 'aerobic', label: '2-mile run', weight: 50, exercises: [{ id: 'run_2mi', label: '2-mile run' }] },
+      { id: 'aerobic', label: 'Cardio', weight: 50, exercises: [
+        { id: 'run_2mi', label: '2-mile run' },
+        { id: 'run_1_5mi', label: '1.5-mile run' },
+        { id: 'hamr', label: '20m HAMR shuttles' },
+      ] },
       { id: 'body', label: 'Waist-to-height', weight: 20, kind: 'body', exercises: [] },
-      { id: 'strength', label: 'Strength', weight: 15, exercises: [{ id: 'hrp', label: 'Hand-release push-ups' }] },
-      { id: 'core', label: 'Core', weight: 15, exercises: [{ id: 'plank', label: 'Forearm plank' }] },
+      { id: 'strength', label: 'Strength', weight: 15, exercises: [
+        { id: 'hrp', label: 'Hand-release push-ups' },
+        { id: 'pushups', label: 'Push-ups' },
+      ] },
+      { id: 'core', label: 'Core', weight: 15, exercises: [
+        { id: 'plank', label: 'Forearm plank' },
+        { id: 'crunches', label: 'Cross-leg reverse crunch' },
+        { id: 'situps', label: 'Sit-ups' },
+      ] },
     ],
   },
 };
@@ -244,25 +255,37 @@ function scaleMax(table, targetMax) {
 }
 
 // ── Table lookup (sex, age, component, exercise) ───────────────────────────
+const PFRA26_NATIVE = new Set(['run_2mi', 'hrp', 'plank']);
+
 export function tableFor(sex, age, component, exercise) {
   const br = bracketFor(age);
-  // 2026 strength/core score out of 15 rather than 20.
-  const repMax = (activeId === 'pfa2026' && (component === 'strength' || component === 'core')) ? 15 : 20;
+  const is2026 = activeId === 'pfa2026';
   let t = null;
 
-  // PFRA-2026 official 2-mile run / hand-release push-up / plank tables.
-  if (activeId === 'pfa2026' && (exercise === 'run_2mi' || exercise === 'hrp' || exercise === 'plank')) {
+  // PFRA-2026 official tables (2-mile run, hand-release push-ups, plank).
+  if (is2026 && PFRA26_NATIVE.has(exercise)) {
     t = pfra26Table(sex, br.key, exercise);
   }
-  // Legacy official primary events.
+  // Legacy official primary events (also serve as 2026 alternates, rescaled).
   else if (exercise === 'run_1_5mi' && RUN[sex]?.[br.key]) t = runTable(RUN[sex][br.key]);
   else if (exercise === 'pushups' && PUSHUP[sex]?.[br.key]) { const [min, max] = PUSHUP[sex][br.key]; t = repTable(min, max, 10, 1); }
   else if (exercise === 'situps' && SITUP[sex]?.[br.key]) { const [min, max] = SITUP[sex][br.key]; t = repTable(min, max, 12, 3); }
-  // Estimated alternates.
+  // Estimated alternates (HAMR, cross-leg crunch, etc.).
   else t = altTable(sex, exercise, br.key);
 
   if (!t) return null;
-  if (t.unit === 'reps' && t.maxPoints !== repMax && activeId !== 'pfa2026') t = scaleMax(t, repMax);
+
+  if (is2026) {
+    // Rescale every event to its 2026 component weight (cardio 50, str/core 15).
+    const target = component === 'aerobic' ? 50 : component === 'body' ? 20 : 15;
+    t = scaleMax(t, target);
+    // Only the native PFRA events carry official 2026 values; the rest are
+    // estimates adapted from the legacy charts.
+    if (!PFRA26_NATIVE.has(exercise)) t = { ...t, official: false };
+  } else if (t.unit === 'reps' && t.maxPoints !== 20) {
+    t = scaleMax(t, 20);
+  }
+
   // Relax run times at altitude (estimate).
   const off = runAltitudeOffset();
   if (off && t.betterDirection === 'lower') {
