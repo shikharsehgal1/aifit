@@ -477,7 +477,8 @@ function coachContext() {
 VIEWS.coach = function () {
   const msgs = coachMessages.map((m, i) => {
     const streaming = coachBusy && i === coachMessages.length - 1 && m.role === 'assistant';
-    const content = escapeHtml(m.content).replace(/\n/g, '<br>') || (streaming ? '<span class="dots">…</span>' : '');
+    const rendered = m.role === 'assistant' ? mdToHtml(m.content) : escapeHtml(m.content).replace(/\n/g, '<br>');
+    const content = m.content ? rendered : (streaming ? '<span class="dots">●</span>' : '');
     return `<div class="msg ${m.role}"><div class="bubble"${streaming ? ' id="coach-stream"' : ''}>${content}</div></div>`;
   }).join('')
     || `<div class="hint" style="padding:8px 0">Ask anything about your training — e.g. <em>"what's the fastest way to add 5 points?"</em> or <em>"build me a 6-week run plan."</em> Your current numbers are shared with the model for grounded advice.</div>`;
@@ -521,12 +522,18 @@ WIRES.coach = function () {
     coachBusy = true; coachAbort = new AbortController();
     render(); // renders user msg + empty streaming bubble (#coach-stream) + Stop button
     const log = $('#coach-log');
+    // Batch DOM/markdown updates to one per frame to keep streaming smooth.
+    let raf = 0;
+    const paint = () => {
+      raf = 0;
+      const b = document.getElementById('coach-stream');
+      if (b) b.innerHTML = mdToHtml(asst.content);
+      if (log) log.scrollTop = log.scrollHeight;
+    };
     try {
       await coachChatStream(history, coachContext(), (full) => {
         asst.content = full;
-        const b = document.getElementById('coach-stream');
-        if (b) b.innerHTML = escapeHtml(full).replace(/\n/g, '<br>');
-        if (log) log.scrollTop = log.scrollHeight;
+        if (!raf) raf = requestAnimationFrame(paint);
       }, coachAbort.signal);
     } catch (e) {
       if (e.name === 'AbortError') { if (asst.content) asst.content += ' …(stopped)'; else asst.content = '(stopped)'; }
@@ -830,6 +837,30 @@ WIRES.about = function () {
 function cap(s){ return s.charAt(0).toUpperCase()+s.slice(1); }
 function clamp(n,lo,hi){ return Math.max(lo,Math.min(hi,n)); }
 function escapeHtml(s){ return String(s).replace(/[&<>"']/g, (c) => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c])); }
+// Minimal, safe markdown → HTML for coach replies (escape first, then format).
+function mdToHtml(src) {
+  let s = escapeHtml(src)
+    .replace(/`([^`]+)`/g, '<code>$1</code>')
+    .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+    .replace(/(^|[^*])\*([^*\n]+)\*/g, '$1<em>$2</em>');
+  const lines = s.split('\n');
+  let html = '', list = null, para = [];
+  const flushP = () => { if (para.length) { html += `<p>${para.join('<br>')}</p>`; para = []; } };
+  const closeL = () => { if (list) { html += `</${list}>`; list = null; } };
+  for (const raw of lines) {
+    const t = raw.trim();
+    let m;
+    if (t === '') { flushP(); closeL(); continue; }
+    if (/^(---+|\*\*\*+|___+)$/.test(t)) { flushP(); closeL(); html += '<hr>'; continue; }
+    if ((m = t.match(/^#{3,}\s+(.*)/))) { flushP(); closeL(); html += `<h4>${m[1]}</h4>`; continue; }
+    if ((m = t.match(/^#{1,2}\s+(.*)/))) { flushP(); closeL(); html += `<h3>${m[1]}</h3>`; continue; }
+    if ((m = t.match(/^[-*+]\s+(.*)/))) { flushP(); if (list !== 'ul') { closeL(); html += '<ul>'; list = 'ul'; } html += `<li>${m[1]}</li>`; continue; }
+    if ((m = t.match(/^\d+\.\s+(.*)/))) { flushP(); if (list !== 'ol') { closeL(); html += '<ol>'; list = 'ol'; } html += `<li>${m[1]}</li>`; continue; }
+    closeL(); para.push(t);
+  }
+  flushP(); closeL();
+  return html;
+}
 // Coerce LLM-parsed fields into the shapes setRaw/applyParsed expect (times → seconds).
 function normalizeParsed(p) {
   p = p || {};
