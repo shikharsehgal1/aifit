@@ -127,6 +127,24 @@ function pfra2026Table(sex, brKey, exercise) {
   const anchors = d.ladder.map((pts, i) => [col[i], pts]).filter((a) => a[0] != null);
   return { unit: d.unit, betterDirection: d.dir, maxPoints: d.ladder[0], min: anchors[anchors.length - 1][0], step: true, official: true, anchors };
 }
+// 2.0 km walk — official MAX times (pass/fail alternate cardio for run-exempt
+// members). Coarse age brackets. Seconds.
+const WALK = {
+  M: { u30: 976, '30_39': 978, '40_49': 983, '50_59': 1000, '60p': 1018 },
+  F: { u30: 1042, '30_39': 1048, '40_49': 1069, '50_59': 1091, '60p': 1133 },
+};
+function walkBracket(age) {
+  if (age < 30) return 'u30';
+  if (age < 40) return '30_39';
+  if (age < 50) return '40_49';
+  if (age < 60) return '50_59';
+  return '60p';
+}
+function walkTable(sex, age) {
+  const max = WALK[sex === 'female' ? 'F' : 'M'][walkBracket(age)];
+  return { unit: 'seconds', betterDirection: 'lower', passFail: true, maxTime: max, min: max, maxPoints: 50, official: true, anchors: [[max, 0]] };
+}
+
 // Waist-to-height ratio (20 pts) — official universal curve, age/sex independent.
 export function bodyTable() {
   const d = PFRA2026.whtr;
@@ -185,6 +203,7 @@ export const RULESETS = {
       { id: 'aerobic', label: 'Cardio', weight: 50, exercises: [
         { id: 'run_2mi', label: '2-mile run' },
         { id: 'hamr', label: '20m HAMR shuttles' },
+        { id: 'walk_2k', label: '2 km walk (pass/fail)' },
       ] },
       { id: 'body', label: 'Waist-to-height', weight: 20, kind: 'body', exercises: [] },
       { id: 'strength', label: 'Strength', weight: 15, exercises: [
@@ -198,6 +217,21 @@ export const RULESETS = {
       ] },
     ],
   },
+};
+
+// AFSPECWAR/EOD elevated standard: every member is held to the male under-25
+// PFRA column (the elevated bar in the official chart), regardless of age/sex.
+RULESETS.pfra_sof = {
+  ...structuredClone(RULESETS.pfa2026),
+  id: 'pfra_sof',
+  label: 'PFRA · AFSPECWAR/EOD',
+  force: { sex: 'male', bracket: 'u25' },
+};
+RULESETS.pfra_sof.standard = {
+  ...RULESETS.pfa2026.standard,
+  rulesetVersion: '2.0.0-pfra2026-sof',
+  reference: 'DAFMAN 36-2905 PFRA — AFSPECWAR/EOD elevated standards',
+  effectiveNote: 'AFSPECWAR/EOD elevated standards: all members are scored against the official male under-25 PFRA column (verbatim), regardless of age or sex. Waist-to-height uses the same universal curve.',
 };
 
 // Active ruleset — switchable. STANDARD/BANDS are live `let` bindings so
@@ -242,12 +276,21 @@ function scaleMax(table, targetMax) {
 
 // ── Table lookup (sex, age, component, exercise) ───────────────────────────
 export function tableFor(sex, age, component, exercise) {
-  const br = bracketFor(age);
+  const rs = RULESETS[activeId];
+  // AFSPECWAR/EOD forces everyone to the male under-25 column.
+  const uSex = rs.force?.sex || sex;
+  const uAge = rs.force?.bracket === 'u25' ? 22 : age;
+  const br = bracketFor(uAge);
+  const is2026 = activeId === 'pfa2026' || activeId === 'pfra_sof';
   let t = null;
 
+  // 2 km walk — pass/fail alternate cardio (uses actual age/sex, coarse brackets).
+  if (is2026 && exercise === 'walk_2k') {
+    t = walkTable(uSex, uAge);
+  }
   // PFRA-2026 — exact official step tables for every event.
-  if (activeId === 'pfa2026') {
-    t = pfra2026Table(sex, br.key, exercise);
+  else if (is2026) {
+    t = pfra2026Table(uSex, br.key, exercise);
   }
   // Legacy official primary events + estimated alternates.
   else if (exercise === 'run_1_5mi' && RUN[sex]?.[br.key]) t = runTable(RUN[sex][br.key]);
