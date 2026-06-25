@@ -6,11 +6,13 @@ const KEY = 'pfai.state.v1';
 const DEFAULT = {
   profile: { sex: 'male', age: 25, height: 70, weight: 180, waist: 36, branch: 'usaf' },
   goal: { date: null, target: 'pass' }, // target: 'pass' | 'satisfactory' | 'excellent'
-  settings: { daysPerWeek: 4, equipment: 'gym', injuries: '', reminders: false, ruleset: 'legacy', altitudeFt: 0 },
+  settings: { daysPerWeek: 4, equipment: 'gym', injuries: '', reminders: false, ruleset: 'pfa2026', altitudeFt: 0 },
   assessments: [], // { ts, input, result }
   logs: [], // workout log entries { ts, type, note, done }
   achievements: [], // earned badge keys
   coach: [], // saved AI-coach conversation { role, content }
+  draftInput: null, // in-progress Assess entry (survives reloads)
+  plan: null, // last generated training plan { reg, settings, ts }
   unit: { id: null, members: [] }, // leader view roster (on-device)
 };
 
