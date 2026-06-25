@@ -201,6 +201,12 @@ input:focus, select:focus, textarea:focus {
 input::placeholder { color: var(--faint); }
 .row { display: flex; gap: 12px; }
 .row > * { flex: 1; }
+/* Prominent select (scoring-standard picker) */
+select.select-strong {
+  font-size: 15px; font-weight: 600; padding: 12px 14px;
+  border-color: var(--line-2); background: var(--panel-2); color: var(--ink);
+}
+select.select-strong:hover { border-color: var(--accent); }
 
 /* ── Buttons ──────────────────────────────────────────────────────────── */
 .btn {
