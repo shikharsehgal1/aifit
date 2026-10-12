@@ -90,6 +90,17 @@ run** scoring, hash routing/deep links, and keyboard tab navigation.
   plank thresholds are **official at the under-25 and 60+ endpoints** and
   **age-interpolated** for the middle brackets (flagged `est` in the UI).
 
+- **Army AFT (General / Combat)** — the five Army Fitness Test events (MDL,
+  HRP, SDC, PLK, 2MR). The user enters the **points** (0–100) earned in any
+  events they have; each needs ≥60, and the total must reach 300 (general) or
+  350 (combat). Per-event bands: <60 Fail, 60–69 Needs Improvement, 70–79
+  Acceptable, 80–89 Good, 90–99 Elite, 100 Max. Advice targets every event
+  under 60 first, otherwise the events in the lowest occupied band; the plan
+  gives those events every other session. Body composition uses the Army
+  **waist-to-height ratio** (< 0.55 passes; army.mil, July 2026 — it replaced
+  the AR 600-9 height/weight tables and tape test). Failing it adds the
+  weight-loss block. Weight is shown (BMI) but no longer has a regulatory max.
+
 Sources: USAF Fitness Assessment Scoring charts (AFROTC/AFPC reproductions,
 Final Version 2022) and published 2026 PFRA endpoints + waist-to-height curve —
 male & female, all age brackets. `STANDARD.rulesetVersion`
@@ -121,7 +132,8 @@ js/
   cross-leg crunch) and the full PFRA-2026 middle-bracket tables (currently
   endpoints are official + age-interpolated; altitude adjustment is an estimate)
 - Component medical-exemption handling in composite logic
-- Multi-branch standards (Army ACFT, Navy PRT, Marine PFT/CFT) — engine is branch-agnostic
+- Raw-performance scoring for the Army AFT (official per-age/sex tables) — currently points are entered directly
+- More branches (Navy PRT, Marine PFT/CFT) — engine is branch-agnostic
 - Wearable import (Apple Health / Garmin)
 - Real backend, accounts, and authorized leader-view sync
 - Push-notification reminders (needs service worker + backend)

@@ -1,7 +1,7 @@
 // PFAi service worker — network-first so deploys propagate immediately, with a
 // cached app shell as the offline fallback. NEVER touches /api/* (dynamic).
 // Bump CACHE to force old caches to be purged on activate.
-const CACHE = 'pfai-v3';
+const CACHE = 'pfai-v4';
 const SHELL = [
   './',
   './index.html',

@@ -3,7 +3,10 @@
 // (aerobic carries the most weight) and respects the user's available days,
 // equipment, injuries and body-composition status.
 
-import { gapAnalysis, fmtTime } from './scoring.js';
+import { gapAnalysis } from './scoring.js';
+import { componentsFor } from './data/standards.js';
+
+const label = (id) => componentsFor().find((c) => c.id === id)?.title ?? id;
 
 const SESSION_LIBRARY = {
   aerobic: {
@@ -21,12 +24,38 @@ const SESSION_LIBRARY = {
     home: ['Plank progression 3×max hold', 'Sit-ups 4×25', 'Hollow holds + leg raises 4 sets'],
     none: ['Plank progression 3×max hold', 'Sit-ups 4×25', 'Hollow holds 4 sets'],
   },
+  // ── Army AFT events ──
+  mdl: {
+    gym: ['Trap-bar deadlift 5×3 @ 80–85% of 3RM', 'Romanian deadlift 4×6 + farmer carries 4×40 m', 'Deadlift 3RM practice — work up to a crisp triple'],
+    home: ['Kettlebell swings 5×15 + goblet squats 4×10', 'Single-leg RDL 4×8/side (loaded backpack)', 'Glute bridges 4×12 + hip-hinge drills'],
+    none: ['Single-leg RDL 4×8/side (loaded backpack)', 'Backpack swings 5×15 + split squats 4×10', 'Glute bridges 4×15 + hip-hinge drills'],
+  },
+  hrp: {
+    gym: ['Hand-release push-up ladder 5×submax', 'HRP test-pace EMOM 10 min + bench 4×8', 'HRP greasing-the-groove (5 sets/day) + dips 3×10'],
+    home: ['Hand-release push-up ladder 5×submax', 'HRP test-pace EMOM 10 min', 'HRP greasing-the-groove (5 sets/day) + decline push-ups'],
+    none: ['Hand-release push-up ladder 5×submax', 'HRP test-pace EMOM 10 min', 'HRP greasing-the-groove (5 sets/day)'],
+  },
+  sdc: {
+    gym: ['SDC rehearsal: sprint / sled drag / lateral / carry / sprint ×3', 'Sled drag 6×25 m + kettlebell carry 4×50 m', 'Shuttle sprints 8×25 m + lateral shuffles 6×25 m'],
+    home: ['Shuttle sprints 10×25 m + lateral shuffles 6×25 m', 'Heavy carry 4×50 m + backward drags (loaded bag) 6×25 m', 'SDC rehearsal with improvised drag + carry ×3'],
+    none: ['Shuttle sprints 10×25 m', 'Lateral shuffles 6×25 m + bear crawls 4×20 m', 'Backpack carry 4×50 m + sprints 6×25 m'],
+  },
+  plk: {
+    gym: ['Plank progression 3×max hold', 'Weighted plank 4×45 s + hollow holds', 'Dead bugs + side planks 4 sets'],
+    home: ['Plank progression 3×max hold', 'Plank shoulder taps 4×45 s + hollow holds', 'Dead bugs + side planks 4 sets'],
+    none: ['Plank progression 3×max hold', 'Plank shoulder taps 4×45 s + hollow holds', 'Dead bugs + side planks 4 sets'],
+  },
+  run2: {
+    gym: ['2-mile pace intervals 6×400 m (treadmill)', 'Tempo run 20–25 min', 'Zone-2 easy run 30–40 min'],
+    home: ['2-mile pace intervals 6×400 m', 'Tempo run 20–25 min', 'Easy run 30–40 min'],
+    none: ['2-mile pace intervals 6×400 m', 'Tempo run 20–25 min', 'Easy run 30–40 min'],
+  },
 };
 
 const INJURY_BLOCKS = {
-  knee: ['intervals', 'stair', 'run'],
-  shoulder: ['bench', 'press', 'push-up', 'dip'],
-  back: ['sit-up', 'weighted', 'leg raise'],
+  knee: ['intervals', 'stair', 'run', 'sprint', 'shuttle', 'lateral', 'squat'],
+  shoulder: ['bench', 'press', 'push-up', 'dip', 'hrp'],
+  back: ['sit-up', 'weighted', 'leg raise', 'deadlift', 'rdl', 'swing', 'drag', 'carry'],
 };
 
 function filterForInjuries(items, injuries) {
@@ -47,6 +76,20 @@ export function generateRegimen(result, opts) {
 
   // Allocate weekly focus by remaining headroom (cheapest points first).
   const focusOrder = gaps.map((g) => g.component);
+  // AFT: focus events take every other session; the rest rotate through the
+  // remaining days so no event is dropped entirely.
+  const tranche = gaps.some((g) => g.focus != null);
+  const focusComps = gaps.filter((g) => g.focus).map((g) => g.component);
+  const otherComps = gaps.filter((g) => !g.focus).map((g) => g.component);
+  const pick = (wk, d) => {
+    if (!tranche) return focusOrder[d % focusOrder.length] || 'aerobic';
+    if (!focusComps.length) return otherComps[(d + wk) % otherComps.length];
+    if (!otherComps.length) return focusComps[(d + wk) % focusComps.length];
+    const half = Math.floor(d / 2);
+    return d % 2 === 0
+      ? focusComps[(half + wk) % focusComps.length]
+      : otherComps[(half + wk * Math.max(1, Math.floor(daysPerWeek / 2))) % otherComps.length];
+  };
   // If body composition flags weight loss, fold in a conditioning/diet emphasis.
   const weightLoss = !!body.needsWeightLoss;
 
@@ -57,7 +100,7 @@ export function generateRegimen(result, opts) {
     const intensity = phaseFor(wk, totalWeeks);
     for (let d = 0; d < daysPerWeek; d++) {
       // rotate focus, weighting the highest-headroom component
-      const comp = focusOrder[d % focusOrder.length] || 'aerobic';
+      const comp = pick(wk, d);
       const pool = filterForInjuries(
         SESSION_LIBRARY[comp][equipment] || SESSION_LIBRARY[comp].none,
         injuries
@@ -91,6 +134,7 @@ export function generateRegimen(result, opts) {
 }
 
 function rationale(gaps, weightLoss) {
+  if (gaps.some((g) => g.focus != null)) return trancheRationale(gaps, weightLoss);
   const lines = [];
   const top = gaps[0];
   if (top) {
@@ -104,6 +148,23 @@ function rationale(gaps, weightLoss) {
   }
   if (weightLoss) {
     lines.push('Body-composition screen flagged: plan includes a calorie deficit + conditioning block.');
+  }
+  return lines;
+}
+
+function trancheRationale(gaps, weightLoss) {
+  const lines = [];
+  const failing = gaps.filter((g) => !g.meetsMin);
+  const focus = gaps.filter((g) => g.focus);
+  if (failing.length) {
+    lines.push(`Priority: ${failing.map((g) => label(g.component)).join(', ')} — below the 60-point event minimum. These must clear to pass, so they get every other session.`);
+  } else if (focus.length) {
+    lines.push(`Priority: ${focus.map((g) => label(g.component)).join(', ')} — your lowest band (${focus[0].band.label}). These get every other session; the other events rotate to hold their scores.`);
+  } else {
+    lines.push('Every entered event is maxed — the plan maintains all five.');
+  }
+  if (weightLoss) {
+    lines.push('Waist-to-height ratio is 0.55 or higher (Army limit): plan includes a calorie deficit + conditioning block.');
   }
   return lines;
 }

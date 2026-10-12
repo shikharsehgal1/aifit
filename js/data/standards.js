@@ -234,6 +234,60 @@ RULESETS.pfra_sof.standard = {
   effectiveNote: 'AFSPECWAR/EOD elevated standards: all members are scored against the official male under-25 PFRA column (verbatim), regardless of age or sex. Waist-to-height uses the same universal curve.',
 };
 
+// ── Army Fitness Test (AFT) ──────────────────────────────────────────────
+// Five events, each scored 0–100 by the official Army tables; the user enters
+// the POINTS they earned (not raw performance), so no per-age/sex tables are
+// embedded. Minimum 60 per event; total 300 (general) or 350 (combat).
+// Per-event bands follow the AIFiT product spec, lower bound inclusive.
+export const AFT_EVENT_BANDS = [
+  { key: 'fail', label: 'Fail', min: 0, max: 59.99, color: '#f87171' },
+  { key: 'needs_improvement', label: 'Needs Improvement', min: 60, max: 69.99, color: '#fbbf24' },
+  { key: 'acceptable', label: 'Acceptable', min: 70, max: 79.99, color: '#93c5fd' },
+  { key: 'good', label: 'Good', min: 80, max: 89.99, color: '#60a5fa' },
+  { key: 'elite', label: 'Elite', min: 90, max: 99.99, color: '#34d399' },
+  { key: 'max', label: 'Max', min: 100, max: 100, color: '#bef264' },
+];
+// Composite bands = the event bands × 5 events (i.e. the average event score).
+const AFT_BANDS = AFT_EVENT_BANDS.map((b) => ({
+  ...b, min: b.min * 5, max: b.max === 100 ? 500 : Math.round(b.max * 5 * 100) / 100,
+}));
+const AFT_EVENTS = [
+  { id: 'mdl', title: 'MDL', label: '3-Rep Max Deadlift' },
+  { id: 'hrp', title: 'HRP', label: 'Hand-Release Push-Up' },
+  { id: 'sdc', title: 'SDC', label: 'Sprint-Drag-Carry' },
+  { id: 'plk', title: 'PLK', label: 'Plank' },
+  { id: 'run2', title: '2MR', label: '2-Mile Run' },
+];
+function aftRuleset(id, variant, passComposite) {
+  return {
+    id,
+    label: `Army AFT · ${variant}`,
+    preview: false,
+    eventBands: AFT_EVENT_BANDS,
+    standard: {
+      authority: 'U.S. Army',
+      reference: `Army Fitness Test (AFT), ${variant} standard; AR 600-9 body composition`,
+      rulesetVersion: `1.0.0-aft-${variant.toLowerCase()}`,
+      effectiveNote: `Enter the points (0–100) you scored in each AFT event. Each event needs at least 60 points; the ${variant.toLowerCase()} standard needs a ${passComposite}-point total. Body composition uses the Army waist-to-height ratio (under 0.55 passes; adopted July 2026, replacing the height/weight tables and tape test). Event bands: under 60 Fail, 60–69 Needs Improvement, 70–79 Acceptable, 80–89 Good, 90–99 Elite, 100 Max.`,
+      weights: Object.fromEntries(AFT_EVENTS.map((e) => [e.id, 100])),
+      passComposite,
+      excellentAt: 450,
+      pointsInput: true,
+      adviceRule: 'tranche',
+      bodyRule: 'army_whtr',
+    },
+    bands: AFT_BANDS,
+    components: AFT_EVENTS.map((e) => ({
+      id: e.id, title: e.title, label: e.label, weight: 100,
+      exercises: [{ id: `aft_${e.id}`, label: e.label }],
+    })),
+  };
+}
+RULESETS.army_aft = aftRuleset('army_aft', 'General', 300);
+RULESETS.army_aft_combat = aftRuleset('army_aft_combat', 'Combat', 350);
+// Identity table: AFT events are entered as points already.
+const AFT_TABLE = { unit: 'points', betterDirection: 'higher', maxPoints: 100, min: 60, official: true, anchors: [[0, 0], [100, 100]] };
+
 // Active ruleset — switchable. STANDARD/BANDS are live `let` bindings so
 // importers see the active set after setRuleset().
 let activeId = 'legacy';
@@ -265,6 +319,12 @@ export function componentsFor(rulesetId = activeId) { return RULESETS[rulesetId]
 export function bandFor(score) {
   return BANDS.find((b) => score >= b.min && score <= b.max) || BANDS[0];
 }
+// Per-event band (AFT only; null for rulesets without event bands).
+export function eventBandFor(points) {
+  const bands = RULESETS[activeId].eventBands;
+  if (!bands) return null;
+  return bands.find((b) => points >= b.min && points <= b.max) || bands[0];
+}
 
 // Scale a 20-point rep/alt table to a different component max (e.g. 2026's
 // 15-point strength/core). No-op when target is 20.
@@ -284,6 +344,7 @@ export function tableFor(sex, age, component, exercise) {
   const is2026 = activeId === 'pfa2026' || activeId === 'pfra_sof';
   let t = null;
 
+  if (exercise?.startsWith('aft_')) return { ...AFT_TABLE, bracket: br };
   // 2 km walk — pass/fail alternate cardio (uses actual age/sex, coarse brackets).
   if (is2026 && exercise === 'walk_2k') {
     t = walkTable(uSex, uAge);
@@ -317,3 +378,6 @@ export const MAX_WEIGHT_BY_HEIGHT = {
 };
 // Secondary waist screen (inches). Approximate.
 export const WAIST_MAX = { male: 39.0, female: 35.5 };
+// Army body composition (AR 600-9 as modified July 2026): waist at the navel ÷
+// height must be below this ratio. Same for every age and sex.
+export const ARMY_WHTR_MAX = 0.55;

@@ -3,7 +3,7 @@
 // text so users can type "I'm a 28M, ran 1.5 in 12:40, did 38 pushups and a
 // 2:10 plank, 185 lbs, 34 inch waist" instead of filling a form.
 
-export function parseNaturalLanguage(text) {
+export function parseNaturalLanguage(text, { aft = false } = {}) {
   const t = ' ' + text.toLowerCase().replace(/[,]/g, ' ') + ' ';
   const out = { components: {} };
 
@@ -33,8 +33,24 @@ export function parseNaturalLanguage(text) {
   // Waist — 34 inch waist / waist 34
   const waist =
     t.match(/waist\s*(?:is|of)?\s*(\d{2}(?:\.\d)?)/) ||
-    t.match(/(\d{2}(?:\.\d)?)\s*(?:in|inch|inches|")\s*waist/);
+    t.match(/(\d{2}(?:\.\d)?)\s*(?:in|inch|inches|")?\s*waist/);
   if (waist) out.waist = clamp(+waist[1], 25, 60);
+
+  // Army AFT: event POINTS — "MDL 72", "deadlift 72", "2MR: 61", "sdc 58 pts".
+  if (aft) {
+    const ev = {
+      mdl: /\b(?:mdl|deadlift)\s*[:=-]?\s*(\d{1,3})\b/,
+      hrp: /\b(?:hrp|hand[- ]?release(?: push[- ]?ups?)?|push[- ]?ups?)\s*[:=-]?\s*(\d{1,3})\b/,
+      sdc: /\b(?:sdc|sprint[- ]?drag[- ]?carry)\s*[:=-]?\s*(\d{1,3})\b/,
+      plk: /\b(?:plk|plank)\s*[:=-]?\s*(\d{1,3})\b(?!:)/,
+      run2: /\b(?:2mr|2[- ]?mile(?: run)?|run)\s*[:=-]?\s*(\d{1,3})\b(?!:)/,
+    };
+    for (const [id, re] of Object.entries(ev)) {
+      const m = t.match(re);
+      if (m) out.components[id] = { exercise: `aft_${id}`, raw: clamp(+m[1], 0, 100) };
+    }
+    return out;
+  }
 
   // Run — "ran 1.5 in 12:40", "1.5 mile 12:40", "run 12:40"
   const run = t.match(/(?:ran|run|1\.5|mile)[^0-9]*(\d{1,2}:\d{2})/);
