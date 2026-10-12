@@ -1,7 +1,7 @@
 // PFAi — app shell: state, routing, and views.
 import { scoreAssessment, gapAnalysis, whatIf, bodyComposition, fmtTime, parseTime, round1 }
   from './scoring.js';
-import { STANDARD, BANDS, tableFor, setRuleset, getRulesetId, getRuleset, listRulesets, componentsFor, bracketFor, setAltitude }
+import { STANDARD, BANDS, tableFor, setRuleset, getRulesetId, getRuleset, listRulesets, componentsFor, bracketFor, setAltitude, eventBandFor }
   from './data/standards.js';
 import { generateRegimen, daysUntil } from './regimen.js';
 import { parseNaturalLanguage } from './parser.js';
@@ -17,6 +17,15 @@ function exercisesFor(comp) {
 function exLabel(comp, id) {
   return exercisesFor(comp).find((e) => e.id === id)?.label ?? id;
 }
+// Display name for a component: AFT events carry a short title (MDL, 2MR…).
+function compLabel(id) {
+  return componentsFor().find((c) => c.id === id)?.title ?? cap(id);
+}
+// Ids of the entered (non-body) components in the active ruleset.
+function inputComps() {
+  return componentsFor().filter((c) => !c.kind).map((c) => c.id);
+}
+const isPoints = () => !!STANDARD.pointsInput;
 
 let state = store.loadState();
 // Activate the persisted ruleset before deriving anything from STANDARD.
@@ -27,26 +36,18 @@ setAltitude(state.settings.altitudeFt || 0);
 let draft = (() => {
   const saved = state.draftInput || state.assessments.at(-1)?.input;
   if (saved?.components) return structuredClone(saved);
-  const firstEx = (cid) => componentsFor().find((c) => c.id === cid)?.exercises[0]?.id;
-  return {
-    sex: state.profile.sex,
-    age: state.profile.age,
-    components: {
-      aerobic: { exercise: firstEx('aerobic') || 'run_1_5mi', raw: '' },
-      strength: { exercise: firstEx('strength') || 'pushups', raw: '' },
-      core: { exercise: firstEx('core') || 'plank', raw: '' },
-    },
-  };
+  return { sex: state.profile.sex, age: state.profile.age, components: {} };
 })();
 // Keep the in-progress entry in memory so reloads don't lose typed numbers.
 function persistDraft() { state.draftInput = structuredClone(draft); persist(); }
 // Snap each component to an exercise the active ruleset actually offers,
-// clearing the raw value when the event changes (units may differ).
+// clearing the raw value when the event changes (units may differ). Entries for
+// other rulesets' components are kept so switching back restores them.
 function normalizeDraftToRuleset() {
-  for (const comp of ['aerobic', 'strength', 'core']) {
+  for (const comp of inputComps()) {
     const opts = exercisesFor(comp);
     const cur = draft.components[comp];
-    if (opts.length && !opts.some((e) => e.id === cur.exercise)) {
+    if (opts.length && !opts.some((e) => e.id === cur?.exercise)) {
       draft.components[comp] = { exercise: opts[0].id, raw: '' };
     }
   }
@@ -97,7 +98,7 @@ function applyShared() {
     if (p.a) draft.age = clamp(+p.a || 25, 17, 65);
     if (p.w) state.profile.waist = clamp(+p.w || 36, 25, 60);
     if (p.h) state.profile.height = clamp(+p.h || 70, 58, 80);
-    if (p.c) for (const k of ['aerobic', 'strength', 'core']) { const e = p.c[k]; if (e) draft.components[k] = { exercise: e[0], raw: e[1] }; }
+    if (p.c) for (const [k, e] of Object.entries(p.c)) { if (Array.isArray(e)) draft.components[k] = { exercise: e[0], raw: e[1] }; }
     normalizeDraftToRuleset();
     history.replaceState(null, '', location.pathname + '#assess');
   } catch {}
@@ -164,6 +165,7 @@ function rawInputValue(comp) {
 function setRaw(comp, val) {
   const c = draft.components[comp];
   if (val === '') { c.raw = ''; return; }
+  if (isPoints()) { c.raw = clamp(Math.round(Number(val)) || 0, 0, 100); return; }
   c.raw = TIME_EXERCISES.has(c.exercise) ? parseTime(val) : Number(val);
 }
 function toast(msg) {
@@ -190,15 +192,18 @@ function currentBody() {
 // ── Hero / landing ─────────────────────────────────────────────────────────
 function heroMarkup() {
   const w = STANDARD.weights;
-  const weightStr = Object.values(w).join('/');
-  const weightLbl = Object.keys(w).map(cap).join(' / ');
+  const vals = Object.values(w);
+  const even = vals.every((v) => v === vals[0]);
+  const weightStr = even ? `${vals.length} × ${vals[0]}` : vals.join('/');
+  const weightLbl = Object.keys(w).map(compLabel).join(even ? ' · ' : ' / ');
+  const authority = STANDARD.authority === 'U.S. Army' ? 'Army' : 'USAF';
   return `
   <section class="hero">
-    <div class="hero-eyebrow">USAF · ${STANDARD.reference.split(',')[0]}</div>
+    <div class="hero-eyebrow">${authority} · ${STANDARD.reference.split(',')[0]}</div>
     <h2 class="hero-title">Know your score<br>before test day.</h2>
-    <p class="hero-sub">Enter your numbers — PFAi computes your weighted
-      composite, flags every component minimum, and shows the cheapest points to your next
-      band. Instant, private, and fully on-device.</p>
+    <p class="hero-sub">${isPoints()
+      ? 'Enter your AFT event points — PFAi checks every 60-point minimum, your total and the Army waist-to-height standard, then shows which events to fix first. Instant, private, and fully on-device.'
+      : 'Enter your numbers — PFAi computes your weighted composite, flags every component minimum, and shows the cheapest points to your next band. Instant, private, and fully on-device.'}</p>
     <div class="hero-stats">
       <div class="hstat"><b>${weightStr}</b><span>${weightLbl}</span></div>
       <div class="hstat"><b>≥${STANDARD.passComposite}</b><span>Composite to pass</span></div>
@@ -222,7 +227,7 @@ VIEWS.assess = function () {
 
       <label>Quick entry — type it in plain English</label>
       <div class="chat" style="margin-top:0">
-        <input id="nl" placeholder="e.g. 28M ran 1.5 in 12:40, 38 pushups, 2:10 plank, 185 lb, 34 waist">
+        <input id="nl" placeholder="${isPoints() ? 'e.g. 28M, MDL 72, HRP 65, SDC 58, PLK 80, 2MR 61, 185 lb, 34 waist' : 'e.g. 28M ran 1.5 in 12:40, 38 pushups, 2:10 plank, 185 lb, 34 waist'}">
         <button class="btn secondary" id="nl-go">Parse</button>
       </div>
 
@@ -241,7 +246,8 @@ VIEWS.assess = function () {
         <div><label>Waist (in)</label><input id="f-waist" type="number" min="25" max="60" step="0.5" value="${state.profile.waist}"></div>
       </div>
 
-      ${componentsFor().filter((c) => !c.kind).map((c) => c.id).map(compInputBlock).join('')}
+      ${isPoints() ? `<h3 style="margin:22px 0 4px">AFT event scores</h3><p class="hint" style="margin:0 0 6px">Enter the points (0–100) you scored in any events you have — leave the rest blank.</p>` : ''}
+      ${inputComps().map(compInputBlock).join('')}
 
       <div style="margin-top:16px; display:flex; gap:8px;">
         <button class="btn" id="save">Save assessment</button>
@@ -254,6 +260,13 @@ VIEWS.assess = function () {
 
 function compInputBlock(comp) {
   const c = draft.components[comp];
+  if (isPoints()) {
+    return `
+  <div class="row" style="align-items:flex-end">
+    <div><label for="raw-${comp}">${compLabel(comp)} — ${exLabel(comp, c.exercise)}</label>
+      <input id="raw-${comp}" data-raw="${comp}" type="number" min="0" max="100" inputmode="numeric" value="${rawInputValue(comp)}" placeholder="points (0–100)"></div>
+  </div>`;
+  }
   const opts = exercisesFor(comp).map((e) => `<option value="${e.id}" ${c.exercise===e.id?'selected':''}>${e.label}</option>`).join('');
   return `
   <div class="row" style="align-items:flex-end">
@@ -268,15 +281,16 @@ function resultPanel() {
   if (r.enteredCount === 0) {
     return `<h2>Assessment</h2><p class="hint">Enter at least one component to see your score, pass/fail status and where to improve.</p>${bodyPanel(body)}`;
   }
-  const band = r.band;
+  // AFT partial entry: band by the average entered event, not the 500-pt total.
+  const band = isPoints() && !r.complete ? eventBandFor(r.composite / r.enteredCount) : r.band;
   const passLine = r.complete
     ? (r.pass ? `<span class="badge tag-ok">PASS</span>` : `<span class="badge tag-fail">FAIL</span>`)
-    : `<span class="pill">${r.enteredCount}/${r.requiredCount} components — partial</span>`;
+    : `<span class="pill">${r.enteredCount}/${r.requiredCount} ${isPoints() ? 'events' : 'components'} — partial</span>`;
 
   const bars = componentsFor().map((comp) => {
     const id = comp.id;
     const c = r.components[id];
-    const title = comp.kind === 'body' ? comp.label : cap(id);
+    const title = comp.kind === 'body' ? comp.label : compLabel(id);
     if (!c) return `<div class="comp-bar"><div class="top"><span>${title}</span><span class="pill">not entered</span></div></div>`;
     const estTag = c.table?.official === false ? ' <span class="pill" title="estimated — official chart pending">est</span>' : '';
     if (c.passFail) {
@@ -286,8 +300,10 @@ function resultPanel() {
     const fillPct = (c.points / c.maxPoints) * 100;
     const color = c.meetsMin ? (fillPct>=85?'var(--accent-2)':'var(--accent)') : 'var(--fail)';
     const tag = comp.kind === 'body' ? `WHtR ${c.raw.toFixed(2)}` : exLabel(id, c.exercise);
+    const eb = eventBandFor(c.points);
+    const bandTag = eb ? ` <span class="badge" style="background:${eb.color};color:#02132b;padding:2px 8px;font-size:11px">${eb.label}</span>` : '';
     return `<div class="comp-bar">
-      <div class="top"><span>${title} <span class="pill">${tag}</span>${estTag}</span>
+      <div class="top"><span>${title} <span class="pill">${tag}</span>${estTag}${bandTag}</span>
         <span>${c.points}/${c.maxPoints} pts ${c.meetsMin?'':'<span class="tag-fail">⚠ below min</span>'}</span></div>
       <div class="track"><div class="fill" style="width:${fillPct}%;background:${color}"></div></div>
     </div>`;
@@ -300,11 +316,16 @@ function resultPanel() {
   if (r.hasPassFail) notes.push('2 km walk is a pass/fail alternate for members with a medical profile (AF Form 469). Official PFRA walk point-scoring is not yet released, so the composite here reflects only the scored components.');
 
   const gaps = gapAnalysis(r);
+  const tranche = STANDARD.adviceRule === 'tranche';
   const improve = gaps.map((g) => {
     const tag = !g.meetsMin ? `<span class="tag-fail">${g.toMinText}</span>`
+      : tranche ? `<span class="muted">${g.band.label} · next band at ${nextBandAt(g.points)}</span>`
       : `<span class="muted">+${g.headroom} pts available</span>`;
-    return `<li><b>${cap(g.component)}</b> — ${tag}</li>`;
+    const focus = tranche && g.focus ? ' <span class="pill">focus</span>' : '';
+    return `<li${tranche && !g.focus ? ' style="opacity:.6"' : ''}><b>${compLabel(g.component)}</b>${focus} — ${tag}</li>`;
   }).join('');
+  const improveHead = !tranche ? 'cheapest points first'
+    : gaps.some((g) => !g.meetsMin) ? 'below 60 first' : 'lowest band first';
 
   const targetBlock = targetMarkup(r);
 
@@ -322,10 +343,10 @@ function resultPanel() {
   </div>
   <div style="margin-top:14px">${bars}</div>
   ${notes.map((n) => `<div class="warn-box" style="margin-top:10px">${n}</div>`).join('')}
-  <h3 style="margin-top:16px">Where to improve <span class="pill">cheapest points first</span></h3>
+  <h3 style="margin-top:16px">Where to improve <span class="pill">${improveHead}</span></h3>
   <ul class="clean">${improve}</ul>
   ${targetBlock}
-  ${getRulesetId() === 'pfa2026' || getRulesetId() === 'pfra_sof' ? '' : bodyPanel(body)}
+  ${hasBodyComponent() ? '' : bodyPanel(body)}
   <div style="margin-top:14px;display:flex;gap:8px;flex-wrap:wrap">
     <button class="btn secondary" data-action="print">Print / save scorecard</button>
     <button class="btn secondary" data-action="share">Share result</button>
@@ -333,11 +354,21 @@ function resultPanel() {
   <p class="cite">Scored under ${STANDARD.reference} ruleset v${STANDARD.rulesetVersion}.</p>`;
 }
 
+function hasBodyComponent() { return componentsFor().some((c) => c.kind === 'body'); }
+// Lowest score in the next event band up (AFT).
+function nextBandAt(points) {
+  const b = getRuleset().eventBands?.find((x) => x.min > points);
+  return b ? `${b.min} (${b.label})` : '—';
+}
+
 // Reverse calculator: the raw number you'd need in each event to reach the next
 // meaningful goal (pass 75 → excellent 90 → max), if the gain came from there.
 function targetMarkup(r) {
   if (!r.complete || r.hasPassFail) return '';
-  const goals = [STANDARD.passComposite, 90, r.maxComposite].filter((g, i, a) => a.indexOf(g) === i);
+  // AFT: a failed event fails the test regardless of total — fix that first.
+  if (isPoints() && r.anyComponentFail) return '';
+  const excellent = STANDARD.excellentAt ?? 90;
+  const goals = [STANDARD.passComposite, excellent, r.maxComposite].filter((g, i, a) => a.indexOf(g) === i);
   const goal = goals.find((g) => g > r.composite);
   if (goal == null) return ''; // already maxed
   const deficit = round1(goal - r.composite);
@@ -345,12 +376,13 @@ function targetMarkup(r) {
     const c = r.components[comp.id];
     if (!c || c.passFail || comp.kind === 'body') return '';
     const need = c.points + deficit;
-    if (need > c.maxPoints + 0.001) return `<li><b>${cap(comp.id)}</b> — <span class="muted">+${round1(c.maxPoints - c.points)} max (not enough alone)</span></li>`;
+    if (need > c.maxPoints + 0.001) return `<li><b>${compLabel(comp.id)}</b> — <span class="muted">+${round1(c.maxPoints - c.points)} max (not enough alone)</span></li>`;
     const tgt = rawForPointsLabel(draft.sex, draft.age, comp.id, c.exercise, need);
     if (!tgt) return '';
-    return `<li><b>${cap(comp.id)}</b> — reach <b style="color:var(--ink)">${tgt}</b> <span class="muted">(${exLabel(comp.id, c.exercise)})</span></li>`;
+    return `<li><b>${compLabel(comp.id)}</b> — reach <b style="color:var(--ink)">${tgt}</b> <span class="muted">(${exLabel(comp.id, c.exercise)})</span></li>`;
   }).join('');
-  const label = goal === STANDARD.passComposite ? 'pass (75)' : goal === 90 ? 'Excellent (90)' : `max (${r.maxComposite})`;
+  const topBand = BANDS.find((b) => b.min === excellent)?.label ?? 'Excellent';
+  const label = goal === STANDARD.passComposite ? `pass (${goal})` : goal === excellent ? `${topBand} (${goal})` : `max (${r.maxComposite})`;
   return `<h3 style="margin-top:16px">To reach ${label} <span class="pill">need +${deficit}</span></h3>
     <p class="hint" style="margin:2px 0 6px">Hit any one of these (others unchanged):</p>
     <ul class="clean">${rows}</ul>`;
@@ -367,6 +399,7 @@ function rawForPointsLabel(sex, age, component, exercise, points) {
     if (points >= y0 && points <= y1) { raw = x0 + (points - y0) / (y1 - y0 || 1) * (x1 - x0); break; }
   }
   if (raw == null) raw = anchors[anchors.length - 1][0];
+  if (t.unit === 'points') return `${Math.ceil(raw)} pts`;
   return t.unit === 'seconds' ? fmtTime(Math.round(raw)) : `${Math.round(raw)}${t.unit === 'shuttles' ? ' shuttles' : ' reps'}`;
 }
 
@@ -379,15 +412,16 @@ function printScorecard() {
   const rows = componentsFor().map((comp) => {
     const id = comp.id;
     const c = r.components[id];
-    const title = comp.kind === 'body' ? comp.label : cap(id);
+    const title = comp.kind === 'body' ? comp.label : compLabel(id);
     if (!c) return `<tr><td>${title}</td><td>—</td><td>—</td><td>not entered</td></tr>`;
     const raw = comp.kind === 'body' ? `WHtR ${c.raw.toFixed(2)}` : (TIME_EXERCISES.has(c.exercise) ? fmtTime(c.raw) : c.raw);
     const label = comp.kind === 'body' ? comp.label : exLabel(id, c.exercise);
     return `<tr><td>${title} — ${label}${c.table?.official === false ? ' (est.)' : ''}</td>
       <td>${raw}</td><td>${c.points}/${c.maxPoints}</td><td>${c.meetsMin ? 'meets min' : 'BELOW MIN'}</td></tr>`;
   }).join('');
-  const bodyRows = (getRulesetId() !== 'pfa2026' && body.checked)
-    ? `<tr><td>Height / weight</td><td>${state.profile.weight} lb</td><td>max ${body.maxWeight}</td><td>${body.hwPass ? 'pass' : 'over'}</td></tr>`
+  const bodyRows = hasBodyComponent() ? '' : body.rule === 'army_whtr'
+    ? (body.checked ? `<tr><td>Waist-to-height (Army)</td><td>${body.waist}" / ${state.profile.height}" = ${body.ratio.toFixed(2)}</td><td>&lt; ${body.ratioMax}</td><td>${body.waistPass ? 'pass' : 'over'}</td></tr>` : '')
+    : body.checked ? `<tr><td>Height / weight</td><td>${state.profile.weight} lb</td><td>max ${body.maxWeight}</td><td>${body.hwPass ? 'pass' : 'over'}</td></tr>`
     + (body.waistPass != null ? `<tr><td>Waist</td><td>${state.profile.waist}"</td><td>max ${body.waistMax}"</td><td>${body.waistPass ? 'pass' : 'over'}</td></tr>` : '')
     : '';
   const status = r.complete ? (r.pass ? 'PASS' : 'FAIL') : `Partial (${r.enteredCount}/${r.requiredCount})`;
@@ -406,15 +440,19 @@ function printScorecard() {
   <h1>PFAi — Fitness Assessment Scorecard</h1>
   <div class="sub">${STANDARD.reference} · ruleset v${STANDARD.rulesetVersion} · generated ${today}</div>
   <div class="meta">${cap(draft.sex)} · age ${draft.age} (${br.label} bracket)</div>
-  <div class="hero"><span class="score">${r.composite}</span><span>/ 100</span>
+  <div class="hero"><span class="score">${r.composite}</span><span>/ ${r.maxComposite}</span>
     <span class="status" style="color:${r.complete ? (r.pass ? '#2f7d32' : '#c0392b') : '#888'}">${status}</span>
     <span>${r.band.label}</span></div>
   <table><thead><tr><th>Component</th><th>Result</th><th>Points</th><th>Status</th></tr></thead>
     <tbody>${rows}${bodyRows}</tbody></table>
-  <div class="disc">Unofficial estimate for training preparation — not affiliated with the U.S. Air Force or DoD,
+  <div class="disc">${STANDARD.authority === 'U.S. Army'
+    ? `Unofficial estimate for training preparation — not affiliated with the U.S. Army or DoD, and not an
+    official assessment of record. Event points are as entered by the user. Confirm against current AFT
+    guidance, AR 600-9 and your unit master fitness trainer.`
+    : `Unofficial estimate for training preparation — not affiliated with the U.S. Air Force or DoD,
     and not an official assessment of record. Legacy run/push-up/sit-up minimums and max-point thresholds
     follow the official USAF scoring charts; intermediate points are interpolated. Confirm against current
-    DAFMAN 36-2905 and your unit fitness program manager.</div>
+    DAFMAN 36-2905 and your unit fitness program manager.`}</div>
   <script>window.onload=function(){window.print()}<\/script>`;
   const w = window.open('', '_blank');
   if (!w) return toast('Allow pop-ups to print your scorecard.');
@@ -423,14 +461,17 @@ function printScorecard() {
 }
 
 function verdictText(r) {
-  if (!r.complete) return `Partial picture from ${r.enteredCount} component(s). Enter all three for an official-style pass/fail.`;
-  if (r.pass) return r.composite >= 90 ? 'Strong — comfortably passing. Push for max where headroom remains.'
+  if (!r.complete) return `Partial picture from ${r.enteredCount} of ${r.requiredCount} ${isPoints() ? 'events' : 'components'}. Enter all ${r.requiredCount} for an official-style pass/fail.`;
+  if (r.pass) return r.composite >= (STANDARD.excellentAt ?? 90) ? 'Strong — comfortably passing. Push for max where headroom remains.'
     : 'Passing. Tighten the weakest component to build margin.';
-  if (r.anyComponentFail) return 'Composite aside, a component is below its minimum — that alone fails the test. Fix it first.';
+  if (r.anyComponentFail) return isPoints()
+    ? 'An event is under the 60-point minimum — that alone fails the AFT. Fix it first.'
+    : 'Composite aside, a component is below its minimum — that alone fails the test. Fix it first.';
   return `Below the ${STANDARD.passComposite}-point composite. Focus on your highest-weight gaps.`;
 }
 
 function bodyPanel(body) {
+  if (body.rule === 'army_whtr') return armyBodyPanel(body);
   if (!body.checked && !body.waist) return '';
   const hw = body.hwPass == null ? '' :
     `<div class="kv"><span>Height/Weight screen</span><span class="${body.hwPass?'tag-ok':'tag-fail'}">${body.hwPass?'Pass':`Over by ${body.overBy} lb`}</span></div>
@@ -439,6 +480,17 @@ function bodyPanel(body) {
     `<div class="kv"><span>Waist screen</span><span class="${body.waistPass?'tag-ok':'tag-fail'}">${body.waistPass?'Pass':`Over by ${body.waistOverBy}"`}</span></div>`;
   const flag = body.needsWeightLoss ? `<div class="warn-box" style="margin-top:8px">Body-composition flagged — your training plan will include a weight-loss block.</div>` : '';
   return `<h3 style="margin-top:16px">Body composition</h3><div class="muted-box">${hw}${wa}${flag}</div>`;
+}
+
+function armyBodyPanel(body) {
+  if (!body.checked) return `<h3 style="margin-top:16px">Body composition</h3><p class="hint">Enter height and waist to check the Army waist-to-height standard.</p>`;
+  const flag = body.needsWeightLoss ? `<div class="warn-box" style="margin-top:8px">Over the Army waist-to-height limit — your training plan will include a weight-loss block.</div>` : '';
+  return `<h3 style="margin-top:16px">Body composition <span class="pill">Army WHtR</span></h3><div class="muted-box">
+    <div class="kv"><span>Waist ÷ height</span><span class="${body.waistPass?'tag-ok':'tag-fail'}">${body.ratio.toFixed(3)} — ${body.waistPass?'Pass':'Fail'} (must be &lt; ${body.ratioMax})</span></div>
+    <div class="kv"><span>Max waist @ ${state.profile.height}"</span><span>${body.waistMax}"${body.waistPass ? '' : ` · over by ${body.waistOverBy}"`}</span></div>
+    ${body.bmi ? `<div class="kv"><span>BMI (info only)</span><span>${body.bmi}</span></div>` : ''}
+    ${flag}</div>
+    <p class="cite">Since July 2026 the Army uses waist (at the navel) ÷ height instead of the height/weight table and tape test. Weight has no separate limit.</p>`;
 }
 
 WIRES.assess = function () {
@@ -471,12 +523,12 @@ WIRES.assess = function () {
     const text = $('#nl').value;
     if (!text.trim()) return;
     let parsed, via = 'rules';
-    const st = await coachStatus();
+    const st = isPoints() ? { available: false } : await coachStatus();
     if (st.available) {
       try { parsed = normalizeParsed(await coachParse(text)); via = 'AI'; }
       catch { parsed = parseNaturalLanguage(text); }
     } else {
-      parsed = parseNaturalLanguage(text);
+      parsed = parseNaturalLanguage(text, { aft: isPoints() });
     }
     applyParsed(parsed);
     persistDraft();
@@ -512,9 +564,7 @@ function applyParsed(p) {
   if (p.height) state.profile.height = p.height;
   if (p.weight) state.profile.weight = p.weight;
   if (p.waist) state.profile.waist = p.waist;
-  for (const comp of ['aerobic','strength','core']) {
-    if (p.components[comp]) draft.components[comp] = { ...p.components[comp] };
-  }
+  for (const [comp, v] of Object.entries(p.components || {})) draft.components[comp] = { ...v };
 }
 
 // ── View: SIMULATOR (what-if) ──────────────────────────────────────────────
@@ -522,7 +572,7 @@ VIEWS.simulator = function () {
   const r = currentResult();
   if (r.enteredCount === 0)
     return `<div class="card"><h2>What-If Simulator</h2><p class="hint">Enter your current numbers on the Assess tab first, then come back to experiment.</p><div style="margin-top:12px"><a class="btn secondary" href="#assess">Go to Assess →</a></div></div>`;
-  const sliders = componentsFor().filter((x) => !x.kind).map((x) => x.id).map((comp) => {
+  const sliders = inputComps().map((comp) => {
     const c = r.components[comp];
     if (!c || c.passFail) return ''; // pass/fail events (walk) have no slider
     const t = tableFor(draft.sex, draft.age, comp, c.exercise);
@@ -530,7 +580,7 @@ VIEWS.simulator = function () {
     const lo = Math.min(...raws), hi = Math.max(...raws);
     const disp = TIME_EXERCISES.has(c.exercise) ? fmtTime(c.raw) : c.raw;
     return `<div class="comp-bar">
-      <div class="top"><span>${cap(comp)} — <span id="sv-${comp}">${disp}</span></span><span id="sp-${comp}">${c.points} pts</span></div>
+      <div class="top"><span>${compLabel(comp)} — <span id="sv-${comp}">${disp}</span></span><span id="sp-${comp}">${c.points} pts</span></div>
       <input type="range" data-sim="${comp}" min="${lo}" max="${hi}" step="${TIME_EXERCISES.has(c.exercise)?1:1}" value="${c.raw}">
     </div>`;
   }).join('');
@@ -538,8 +588,8 @@ VIEWS.simulator = function () {
     <h2>What-If Simulator</h2>
     <p class="hint" style="max-width:640px">See your score <b style="color:var(--ink)">before you train for it.</b> Drag any event to a target you think you could hit — your composite and PASS/FAIL update live, so you can find where a little effort buys the most points. Nothing here is saved; it's a sandbox on top of your current Assess numbers.</p>
     <div class="score-hero" style="margin:16px 0 6px">
-      <div class="dial" id="sim-dial" style="--pct:${r.composite};--dial-color:${r.band.color}">
-        <div class="num"><b id="sim-score">${r.composite}</b><span>/ 100</span></div>
+      <div class="dial" id="sim-dial" style="--pct:${Math.round(r.composite / r.maxComposite * 100)};--dial-color:${r.band.color}">
+        <div class="num"><b id="sim-score">${r.composite}</b><span>/ ${r.maxComposite}</span></div>
       </div>
       <div id="sim-verdict"></div>
     </div>
@@ -553,7 +603,7 @@ WIRES.simulator = function () {
     const res = whatIf(assessInput(), overrides);
     $('#sim-score').textContent = res.composite;
     const dial = $('#sim-dial');
-    dial.style.setProperty('--pct', res.composite);
+    dial.style.setProperty('--pct', Math.round(res.composite / res.maxComposite * 100));
     dial.style.setProperty('--dial-color', res.band.color);
     $('#sim-verdict').innerHTML =
       `<div class="badge" style="background:${res.band.color};color:#02132b">${res.band.label}</div>
@@ -581,12 +631,21 @@ function coachContext() {
   const r = currentResult();
   if (r.enteredCount === 0) return '';
   const lines = [`Sex ${draft.sex}, age ${draft.age} (${bracketFor(draft.age).label}). Ruleset: ${getRuleset().label}.`,
-    `Composite ${r.composite}/100 — ${r.band.label}${r.complete ? (r.pass ? ' (PASS)' : ' (FAIL)') : ' (partial)'}.`];
+    `Composite ${r.composite}/${r.maxComposite} — ${r.band.label}${r.complete ? (r.pass ? ' (PASS)' : ' (FAIL)') : ' (partial)'}.`];
   for (const comp of componentsFor().map((c) => c.id)) {
     const c = r.components[comp];
     if (!c) continue;
     const raw = c.unit === 'seconds' ? fmtTime(c.raw) : (c.unit === 'ratio' ? c.raw.toFixed(2) : c.raw);
-    lines.push(`- ${cap(comp)} (${exLabel(comp, c.exercise)}): ${raw} → ${c.points}/${c.maxPoints} pts${c.meetsMin ? '' : ' [BELOW MINIMUM]'}.`);
+    const eb = eventBandFor(c.points);
+    const rawTxt = c.unit === 'points' ? '' : `${raw} → `;
+    lines.push(`- ${compLabel(comp)} (${exLabel(comp, c.exercise)}): ${rawTxt}${c.points}/${c.maxPoints} pts${eb ? ` [${eb.label}]` : ''}${c.meetsMin ? '' : ' [BELOW MINIMUM]'}.`);
+  }
+  if (STANDARD.adviceRule === 'tranche') {
+    const focus = gapAnalysis(r).filter((g) => g.focus);
+    if (focus.length) lines.push(`Priority events (app rule: anything under 60 first, else the lowest band): ${focus.map((g) => compLabel(g.component)).join(', ')}.`);
+    const b = currentBody();
+    if (b.checked) lines.push(`Army waist-to-height ${b.ratio.toFixed(3)} (limit < 0.55): ${b.waistPass ? 'pass' : 'FAIL — needs fat loss'}.`);
+    return lines.join('\n');
   }
   const gaps = gapAnalysis(r).filter((g) => g.headroom > 0);
   if (gaps.length) lines.push(`Cheapest points available: ${gaps.map((g) => `${cap(g.component)} +${g.headroom}`).join(', ')}.`);
@@ -718,19 +777,21 @@ WIRES.plan = function () {
   if (state.plan?.reg) wirePlan(); // wire the restored plan's buttons/checkboxes
 };
 function planMarkup(reg) {
-  const colors = { aerobic:'var(--accent)', strength:'var(--warn)', core:'var(--accent-2)', conditioning:'#b06fd0' };
+  const colors = isPoints()
+    ? { mdl:'#f59e0b', hrp:'var(--warn)', sdc:'#f472b6', plk:'var(--accent-2)', run2:'var(--accent)', conditioning:'#b06fd0' }
+    : { aerobic:'var(--accent)', strength:'var(--warn)', core:'var(--accent-2)', conditioning:'#b06fd0' };
   const done = new Set(state.logs.filter(l=>l.done).map(l=>l.note));
   const weeks = reg.plan.map((w) => `
     <div class="week">
       <h3><span>Week ${w.week}</span><span class="pill">${w.phase}</span></h3>
       ${w.sessions.map((s,i)=>`<div class="session">
         <span class="dot" style="background:${colors[s.component]||'#888'}"></span>
-        <span style="flex:1"><b>${cap(s.component)}</b> — ${s.prescription}</span>
+        <span style="flex:1"><b>${compLabel(s.component)}</b> — ${s.prescription}</span>
         <input type="checkbox" data-log="${w.week}-${i}" title="mark done" ${done.has(`${w.week}-${i}`)?'checked':''}>
       </div>`).join('')}
     </div>`).join('');
   const legend = `<div class="legend">${Object.entries(colors).map(([k,c]) =>
-    `<span><i style="background:${c}"></i>${cap(k)}</span>`).join('')}</div>`;
+    `<span><i style="background:${c}"></i>${compLabel(k)}</span>`).join('')}</div>`;
   return `<div style="display:flex;justify-content:space-between;align-items:center;gap:8px">
       <h2 style="margin:0">Your regimen <span class="pill">${reg.weeks} weeks</span></h2>
       <button class="btn secondary" id="plan-dl" style="padding:6px 12px">Download .ics</button>
@@ -775,7 +836,7 @@ function downloadPlanICS(reg) {
         `UID:pfai-${wi}-${si}-${ymd(d)}@pfai`,
         `DTSTART;VALUE=DATE:${ymd(d)}`,
         `DTEND;VALUE=DATE:${ymd(dn)}`,
-        `SUMMARY:PFAi W${w.week}: ${cap(s.component)} — ${s.prescription.replace(/[\n,]/g, ' ')}`,
+        `SUMMARY:PFAi W${w.week}: ${compLabel(s.component)} — ${s.prescription.replace(/[\n,]/g, ' ')}`,
         'END:VEVENT');
     });
   });
@@ -789,7 +850,7 @@ function downloadPlanICS(reg) {
 // ── View: PROGRESS ─────────────────────────────────────────────────────────
 VIEWS.progress = function () {
   const comp = store.trendSeries(state, 'composite');
-  const series = ['aerobic','strength','core'].map((k)=>({k,data:store.trendSeries(state,k)}));
+  const series = inputComps().map((k)=>({k,data:store.trendSeries(state,k)}));
   const badges = state.achievements.map((k)=>`<span class="badge" style="background:var(--panel-2)">🏅 ${store.badgeLabel(k)}</span>`).join(' ') || '<span class="hint">No badges yet — save an assessment to start.</span>';
   const latest = comp.at(-1)?.value;
   const peak = comp.length ? Math.max(...comp.map(p=>p.value)) : null;
@@ -797,7 +858,7 @@ VIEWS.progress = function () {
     <div class="card">
       <h2>Composite trend</h2>
       ${comp.length ? `<div class="trend-head"><div><b>${latest}</b><span>latest</span></div><div><b>${peak}</b><span>peak</span></div><div><b>${comp.length}</b><span>logged</span></div></div>${sparkline(comp)}` : '<p class="hint">Save assessments over time to see your trend.</p>'}
-      <div style="margin-top:14px">${series.map(s=>s.data.length?`<div class="comp-bar"><div class="top"><span>${cap(s.k)}</span><span>${s.data.at(-1).value} pts</span></div>${sparkline(s.data,40)}</div>`:'').join('')}</div>
+      <div style="margin-top:14px">${series.map(s=>s.data.length?`<div class="comp-bar"><div class="top"><span>${compLabel(s.k)}</span><span>${s.data.at(-1).value} pts</span></div>${sparkline(s.data,40)}</div>`:'').join('')}</div>
     </div>
     <div class="card">
       <h2>Achievements</h2>
@@ -979,7 +1040,7 @@ WIRES.leader = function () {
 
 // ── View: ABOUT / STANDARDS ─────────────────────────────────────────────────
 VIEWS.about = function () {
-  const weights = Object.entries(STANDARD.weights).map(([k, v]) => `${cap(k)} ${v}`).join(' / ');
+  const weights = Object.entries(STANDARD.weights).map(([k, v]) => `${compLabel(k)} ${v}`).join(' / ');
   return `<div class="card">
     <h2>Standards & data provenance</h2>
     <p class="hint" style="margin-bottom:16px">Active standard: <b style="color:var(--ink)">${getRuleset().label}</b> — switch it at the top of the <a href="#assess">Assess</a> tab.</p>
@@ -990,8 +1051,10 @@ VIEWS.about = function () {
     <div class="kv"><span>Pass mark</span><b>≥ ${STANDARD.passComposite} composite + every component minimum</b></div>
     <div class="warn-box" style="margin-top:12px">${STANDARD.effectiveNote}</div>
     <h3 style="margin-top:16px">Bands</h3>
-    <ul class="clean">${BANDS.map(b=>`<li><span class="badge" style="background:${b.color};color:#02132b">${b.label}</span> &nbsp; ${b.min}–${b.max===100?100:Math.floor(b.max)}</li>`).join('')}</ul>
-    <p class="cite"><b>PFRA-2026</b> uses the <b>verbatim official charts</b> (every event, age bracket and sex) scored by exact threshold lookup — transcribed directly from the published PFRA Scoring Charts. <b>Legacy</b> uses official component minimums and maximum-point thresholds with intermediate points interpolated. Sources: USAF Fitness Assessment / PFRA Scoring charts.</p>
+    <ul class="clean">${BANDS.map(b=>`<li><span class="badge" style="background:${b.color};color:#02132b">${b.label}</span> &nbsp; ${b.min}–${Number.isInteger(b.max)?b.max:Math.floor(b.max)}</li>`).join('')}</ul>
+    ${getRuleset().eventBands ? `<h3 style="margin-top:16px">Event bands <span class="pill">per event</span></h3>
+    <ul class="clean">${getRuleset().eventBands.map(b=>`<li><span class="badge" style="background:${b.color};color:#02132b">${b.label}</span> &nbsp; ${b.min}–${Number.isInteger(b.max)?b.max:Math.floor(b.max)}</li>`).join('')}</ul>` : ''}
+    <p class="cite">${STANDARD.authority === 'U.S. Army' ? '<b>Army AFT</b> takes the event points you enter (scored by the official Army tables at your test) and applies the 60-point event minimum and the general (300) or combat (350) total. Body composition uses the Army waist-to-height ratio (&lt; 0.55, Army body-composition update of July 2026). Sources: Army Fitness Test guidance; AR 600-9; army.mil.' : `<b>PFRA-2026</b> uses the <b>verbatim official charts</b> (every event, age bracket and sex) scored by exact threshold lookup — transcribed directly from the published PFRA Scoring Charts. <b>Legacy</b> uses official component minimums and maximum-point thresholds with intermediate points interpolated. Sources: USAF Fitness Assessment / PFRA Scoring charts.`}</p>
   </div>`;
 };
 
@@ -1027,7 +1090,7 @@ function mdToHtml(src) {
 function normalizeParsed(p) {
   p = p || {};
   const out = { sex: p.sex, age: p.age, height: p.height, weight: p.weight, waist: p.waist, components: {} };
-  for (const comp of ['aerobic','strength','core']) {
+  for (const comp of inputComps()) {
     const c = p.components?.[comp];
     if (!c || c.raw == null || c.raw === '') continue;
     const ex = c.exercise;

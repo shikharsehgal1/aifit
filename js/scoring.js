@@ -10,6 +10,8 @@ import {
   bodyTable,
   MAX_WEIGHT_BY_HEIGHT,
   WAIST_MAX,
+  ARMY_WHTR_MAX,
+  eventBandFor,
 } from './data/standards.js';
 
 // Exact step lookup for official PFRA tables (anchors are [threshold, points]
@@ -180,9 +182,26 @@ export function gapAnalysis(result) {
       efficiency: round1(headroom),
     });
   }
+  if (STANDARD.adviceRule === 'tranche') return trancheFocus(gaps);
   // Cheapest points first = where the most composite headroom remains.
   // Aerobic (weight 60) usually dominates, which is the strategic insight.
   gaps.sort((a, b) => b.efficiency - a.efficiency);
+  return gaps;
+}
+
+// AFT advice rule: improve every event under the 60-point minimum first; if
+// none, improve the events in the lowest band the user occupies. Focus events
+// sort first (weakest first), then the rest by score ascending.
+function trancheFocus(gaps) {
+  for (const g of gaps) g.band = eventBandFor(g.points);
+  const failing = gaps.filter((g) => !g.meetsMin);
+  let focus = failing;
+  if (!focus.length) {
+    const lowest = Math.min(...gaps.map((g) => g.band.min));
+    focus = gaps.filter((g) => g.band.min === lowest && g.band.key !== 'max');
+  }
+  for (const g of gaps) g.focus = focus.includes(g);
+  gaps.sort((a, b) => (b.focus - a.focus) || (a.points - b.points));
   return gaps;
 }
 
@@ -208,6 +227,7 @@ function formatDelta(r, targetRaw) {
     return `${fmtTime(diff)} ${sign} (reach ${fmtTime(targetRaw)})`;
   }
   const sign = r.betterDirection === 'higher' ? 'more' : 'fewer';
+  if (r.unit === 'points') return `${round1(diff)} more points (reach ${targetRaw})`;
   return `${Math.round(diff)} ${sign} (reach ${Math.round(targetRaw)})`;
 }
 
@@ -227,6 +247,7 @@ export function whatIf(baseInput, overrides) {
 
 // Body-composition screen. Returns pass/fail for height/weight + secondary waist.
 export function bodyComposition({ sex, height, weight, waist }) {
+  if (STANDARD.bodyRule === 'army_whtr') return armyBodyComposition({ height, weight, waist });
   const out = { checked: false };
   if (height && weight) {
     const h = clampHeight(Math.round(height));
@@ -253,6 +274,26 @@ export function bodyComposition({ sex, height, weight, waist }) {
     out.needsWeightLoss = !out.hwPass;
   } else {
     out.needsWeightLoss = false;
+  }
+  return out;
+}
+
+// Army: waist-to-height ratio must be below 0.55 (no weight table, no tape).
+// Failing it means the soldier needs to lose fat, so it drives the weight-loss
+// block. Weight is reported (BMI) but no longer has a regulatory maximum.
+function armyBodyComposition({ height, weight, waist }) {
+  const out = { checked: false, rule: 'army_whtr', needsWeightLoss: false };
+  if (height && weight) out.bmi = round1((weight / (height * height)) * 703);
+  if (height && waist) {
+    out.checked = true;
+    out.waist = waist;
+    out.ratio = Math.round((waist / height) * 1000) / 1000;
+    out.ratioMax = ARMY_WHTR_MAX;
+    // Largest waist (to 0.1") that is still under the limit at this height.
+    out.waistMax = Math.ceil(ARMY_WHTR_MAX * height * 10 - 1) / 10;
+    out.waistPass = waist / height < ARMY_WHTR_MAX; // unrounded ratio
+    out.waistOverBy = out.waistPass ? 0 : round1(waist - out.waistMax);
+    out.needsWeightLoss = !out.waistPass;
   }
   return out;
 }

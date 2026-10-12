@@ -89,13 +89,16 @@ export function trendSeries(state, key) {
     .filter((p) => p.value != null);
 }
 
+// Composite as a percentage of the ruleset's max (100 for USAF, 500 for AFT).
+const pct = (r) => (r?.complete ? (r.composite / (r.maxComposite || 100)) * 100 : 0);
+
 // Achievement rules. Returns newly-earned badges given a fresh result.
 const BADGES = [
   { key: 'first_assess', label: 'First Assessment', test: (s) => s.assessments.length >= 1 },
   { key: 'passed', label: 'Passed the PFA', test: (s, r) => r?.pass === true },
-  { key: 'satisfactory', label: 'Reached Satisfactory', test: (s, r) => r?.composite >= 80 },
-  { key: 'excellent', label: 'Reached Excellent', test: (s, r) => r?.composite >= 90 },
-  { key: 'max', label: 'Maxed the PFA', test: (s, r) => r?.composite >= 100 },
+  { key: 'satisfactory', label: 'Reached Satisfactory', test: (s, r) => pct(r) >= 80 },
+  { key: 'excellent', label: 'Reached Excellent', test: (s, r) => pct(r) >= 90 },
+  { key: 'max', label: 'Maxed the PFA', test: (s, r) => pct(r) >= 100 },
   { key: 'logger_7', label: '7 Workouts Logged', test: (s) => s.logs.filter((l) => l.done).length >= 7 },
 ];
 
